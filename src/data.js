@@ -2,6 +2,16 @@
 // the browser blocks a direct request), or a PGN file the user uploads.
 import { Chess } from "../vendor/chess.js";
 
+// Accepts "MagnusFan", "@MagnusFan", " magnusfan ", or a profile URL like
+// https://www.chess.com/member/magnusfan. Returns the lower-case username or null.
+export function normalizeUser(input) {
+  let s = String(input || "").trim();
+  const m = s.match(/chess\.com\/(?:member|stats\/[a-z]+(?:\/[a-z]+)?|games\/archive|profile)\/([A-Za-z0-9_-]+)/i);
+  if (m) s = m[1];
+  s = s.replace(/^@+/, "").replace(/[\/?#].*$/, "").trim().toLowerCase();
+  return /^[a-z0-9_-]{2,40}$/.test(s) ? s : null;
+}
+
 const LOSS = new Set(["checkmated", "resigned", "timeout", "abandoned", "lose", "bughousepartnerlose"]);
 const DRAW = new Set(["agreed", "repetition", "stalemate", "insufficient", "50move", "timevsinsufficient"]);
 
@@ -26,7 +36,8 @@ async function getJSON(path) {
 
 // Returns games newest first: {white, black, result, pgn, ts, link, timeClass}
 export async function fetchChessCom(username, { timeClasses, wantLosses, onProgress }) {
-  const user = username.trim().toLowerCase();
+  const user = normalizeUser(username);
+  if (!user) throw new Error("아이디 형식이 이상해. Chess.com 아이디만 넣어 줘.");
   let archives;
   try {
     archives = (await getJSON(`/pub/player/${encodeURIComponent(user)}/games/archives`)).archives || [];
@@ -40,14 +51,22 @@ export async function fetchChessCom(username, { timeClasses, wantLosses, onProgr
   for (let i = archives.length - 1; i >= 0 && losses < wantLosses && i >= archives.length - 24; i--) {
     const path = new URL(archives[i]).pathname;
     onProgress && onProgress(`${path.split("/").slice(-2).join("년 ")}월 기록 불러오는 중…`);
-    const month = (await getJSON(path)).games || [];
+    let month = [];
+    try {
+      month = (await getJSON(path)).games || [];
+    } catch (e) {
+      if (!games.length && i === archives.length - 1) throw e;
+      console.warn("skip month", path, e);
+      continue;
+    }
     month.sort((a, b) => b.end_time - a.end_time);
     for (const g of month) {
       if (g.rules !== "chess" || !g.pgn) continue;
       if (timeClasses && !timeClasses.includes(g.time_class)) continue;
       const meWhite = g.white.username.toLowerCase() === user;
       const mine = meWhite ? g.white.result : g.black.result;
-      const res = mine === "win" ? "W" : DRAW.has(mine) ? "D" : LOSS.has(mine) ? "L" : "L";
+      const res = mine === "win" ? "W" : DRAW.has(mine) ? "D" : LOSS.has(mine) ? "L" : null;
+      if (!res) continue;
       games.push({
         white: g.white.username,
         black: g.black.username,
@@ -68,7 +87,7 @@ export async function fetchChessCom(username, { timeClasses, wantLosses, onProgr
 }
 
 export function parsePgnFile(text, username) {
-  const user = username.trim().toLowerCase();
+  const user = normalizeUser(username) || String(username).trim().toLowerCase();
   const chunks = text.replace(/\r/g, "").split(/\n\n(?=\[Event )/);
   const games = [];
   for (const chunk of chunks) {

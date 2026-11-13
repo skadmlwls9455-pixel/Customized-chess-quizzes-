@@ -6,16 +6,31 @@ export class Engine {
     this.worker = new Worker(url);
     this.queue = [];
     this.current = null;
-    this.ready = new Promise((resolve) => {
+    this.dead = null;
+    this.ready = new Promise((resolve, reject) => {
       this._onReady = resolve;
+      this._readyFail = reject;
+      setTimeout(() => {
+        if (this._onReady) this._fail(new Error("엔진이 30초 안에 켜지지 않았어"));
+      }, 30000);
     });
     this.worker.onmessage = (e) => this._line(typeof e.data === "string" ? e.data : String(e.data));
-    this.worker.onerror = (e) => {
-      if (this.current) this.current.reject(new Error("engine error: " + (e.message || "unknown")));
-    };
+    this.worker.onerror = (e) => this._fail(new Error("엔진 오류: " + (e.message || "unknown")));
     this.worker.postMessage("uci");
     this.worker.postMessage("setoption name Hash value 32");
     this.worker.postMessage("isready");
+  }
+
+  _fail(err) {
+    if (this.dead) return;
+    this.dead = err;
+    if (this._readyFail) this._readyFail(err);
+    this._onReady = null;
+    if (this.current) { clearTimeout(this.current.timer); this.current.reject(err); }
+    this.queue.forEach((j) => j.reject(err));
+    this.queue = [];
+    this.current = null;
+    try { this.worker.terminate(); } catch (_) {}
   }
 
   _line(line) {
@@ -42,6 +57,7 @@ export class Engine {
         .map(Number)
         .sort((a, b) => a - b)
         .map((k) => job.infos[k]);
+      clearTimeout(job.timer);
       this.current = null;
       job.resolve({ infos, best: best && best !== "(none)" ? best : null });
       this._next();
@@ -54,9 +70,15 @@ export class Engine {
     this.worker.postMessage(`setoption name MultiPV value ${job.multipv}`);
     this.worker.postMessage(`position fen ${job.fen}`);
     this.worker.postMessage(`go depth ${job.depth}`);
+    // watchdog: ask for a move after 20s, give up after 40s
+    job.timer = setTimeout(() => {
+      this.worker.postMessage("stop");
+      job.timer = setTimeout(() => this._fail(new Error("엔진이 응답하지 않아")), 20000);
+    }, 20000);
   }
 
   analyse(fen, depth, multipv = 1) {
+    if (this.dead) return Promise.reject(this.dead);
     return new Promise((resolve, reject) => {
       this.queue.push({ fen, depth, multipv, resolve, reject, infos: {} });
       this._next();

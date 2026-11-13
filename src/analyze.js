@@ -118,6 +118,7 @@ export async function buildPuzzle(engine, game, d, depth) {
       }
     }
   }
+  if (steps.length && steps[0].accept.some((a) => a.slice(0, 4) === d.playedUci.slice(0, 4))) steps.length = 0;
   const theme = [];
   if (refline[0] && refline[0].includes("x")) theme.push("기물 흘림");
   if (evalBest > 300 && evalPlayed < 100) theme.push("이기던 판 놓침");

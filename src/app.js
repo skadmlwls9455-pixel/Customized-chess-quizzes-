@@ -2,13 +2,14 @@
 import { Chess } from "../vendor/chess.js";
 import { PIECE } from "./pieces.js";
 import { Engine } from "./engine.js";
-import { fetchChessCom, parsePgnFile } from "./data.js";
+import { fetchChessCom, parsePgnFile, normalizeUser } from "./data.js";
 import { findDecisiveMove, buildPuzzle, buildReport } from "./analyze.js";
 
 const FILES = "abcdefgh";
 const FILTERS = ["전체","안 푼 것","손버릇","기물 흘림","오프닝","잡을 수 있었음","이기던 판 놓침","메이트 있음"];
 const QUALITY = { fast: [8, 11], normal: [10, 13], deep: [12, 16] };
 const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 let USER = "", PUZ = [], REPORT = null, CACHE = null;
 let store = {done:{}, clean:{}, habit:{}};
@@ -41,7 +42,7 @@ document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
   if (b.dataset.tab === "home"){ renderSaved(); show("home"); return; }
   if (b.dataset.tab === "report") renderReport();
   show(b.dataset.tab);
-  if (b.dataset.tab === "puzzle") draw();
+  if (b.dataset.tab === "puzzle" && st) draw();
 });
 $("logoIc").style.backgroundImage = `url("${PIECE.wn}")`;
 
@@ -66,10 +67,16 @@ function openCache(u, c){
 }
 
 /* ---------- analysis pipeline ---------- */
-let cancelled = false, engine = null;
+let cancelled = false, engine = null, running = false;
 $("cancelBtn").onclick = () => { cancelled = true; $("progSub").textContent = "정리하는 중…"; };
 
 async function run(user, getGames){
+  if (running) return;
+  running = true;
+  try { await runInner(user, getGames); }
+  finally { running = false; }
+}
+async function runInner(user, getGames){
   $("err").textContent = "";
   cancelled = false;
   show("progress");
@@ -90,8 +97,8 @@ async function run(user, getGames){
   $("progTitle").textContent = todo.length ? `진 판 ${todo.length}개 분석 중` : "이미 분석한 판이야";
   if (todo.length){
     $("progSub").textContent = "엔진 준비 중…";
-    try { engine = engine || new Engine(); await engine.ready; }
-    catch (e){ show("home"); $("err").textContent = "엔진을 불러오지 못했어: " + e.message; return; }
+    try { if (!engine || engine.dead) engine = new Engine(); await engine.ready; }
+    catch (e){ engine = null; show("home"); $("err").textContent = "엔진을 불러오지 못했어. 브라우저를 최신으로 업데이트하거나 다른 브라우저로 해 봐. (" + e.message + ")"; return; }
   }
   const t0 = Date.now();
   for (let i = 0; i < todo.length && !cancelled; i++){
@@ -107,7 +114,10 @@ async function run(user, getGames){
         if (p.steps.length) puzzles.push(p);
       }
       CACHE.analyzed.push(g.link || String(g.ts));
-    } catch (e){ console.warn("skip game", g.link, e); }
+    } catch (e){
+      console.warn("skip game", g.link, e);
+      if (engine && engine.dead){ $("err").textContent = "분석 중 엔진이 멈췄어. 지금까지 만든 퍼즐만 보여 줄게."; break; }
+    }
     puzzles.sort((a, b) => b.date.localeCompare(a.date));
     CACHE.puzzles = puzzles; writeCache();
   }
@@ -117,8 +127,10 @@ async function run(user, getGames){
 
 $("form").addEventListener("submit", e => {
   e.preventDefault();
-  const user = $("user").value.trim();
-  if (!user){ $("err").textContent = "아이디를 입력해 줘."; return; }
+  const raw = $("user").value.trim();
+  if (!raw){ $("err").textContent = "아이디를 입력해 줘."; return; }
+  const user = normalizeUser(raw);
+  if (!user){ $("err").textContent = "아이디 형식이 이상해. Chess.com 아이디나 프로필 주소를 넣어 줘."; return; }
   const tcs = [...document.querySelectorAll(".tc:checked")].map(x => x.value);
   if (!tcs.length){ $("err").textContent = "시간 종류를 하나 이상 골라 줘."; return; }
   const want = +$("nLoss").value;
@@ -131,8 +143,9 @@ $("form").addEventListener("submit", e => {
 });
 $("pgnFile").addEventListener("change", async e => {
   const f = e.target.files[0]; if (!f) return;
-  const user = $("user").value.trim();
-  if (!user){ $("err").textContent = "PGN 속 내 아이디를 먼저 입력해 줘."; e.target.value = ""; return; }
+  const raw = $("user").value.trim();
+  const user = normalizeUser(raw) || raw.toLowerCase();
+  if (!raw){ $("err").textContent = "PGN 속 내 아이디를 먼저 입력해 줘."; e.target.value = ""; return; }
   const text = await f.text();
   const want = +$("nLoss").value;
   run(user, async () => {
@@ -159,7 +172,7 @@ function renderReport(){
   if (r.thrown) rules.push(`<b>이기던 판을 ${r.thrown}번 놓쳤어.</b> 앞서 있을 땐 기물을 맞교환해서 판을 단순하게 만들자.`);
   if (r.missed) rules.push(`<b>상대 실수를 못 잡은 판이 ${r.missed}개야.</b> 상대가 방금 둔 수가 뭘 비웠는지 한 번씩 봐.`);
   $("reportView").innerHTML = `
-    <h2>${USER}의 리포트</h2>
+    <h2>${esc(USER)}의 리포트</h2>
     <div class="rgrid">
       <div class="rcard"><b>${t.n}</b><span>불러온 판 (${t.W}승 ${t.D}무 ${t.L}패)</span></div>
       <div class="rcard"><b>${r.nPuz}</b><span>만든 오답 퍼즐</span></div>
@@ -489,6 +502,7 @@ $("nextBtn").onclick = () => {
   load();
 };
 document.addEventListener("keydown", e => {
+  if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || $("puzzleView").classList.contains("hidden")) return;
   if (e.key === "ArrowRight") $("nextBtn").click();
   if (e.key === "ArrowLeft") $("prevBtn").click();
 });
