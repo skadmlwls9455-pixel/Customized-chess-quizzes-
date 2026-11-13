@@ -226,7 +226,7 @@ function renderSide(){
     if (store.habit[p.id]) b.classList.add("habit");
     if (k === pos) b.classList.add("cur");
     b.title = `${p.date} vs ${p.opp}`;
-    b.onclick = () => { pos = k; load(); };
+    b.onclick = () => { pos = k; load(); if (innerWidth <= 900) $("puzzleView").scrollIntoView({ behavior: "smooth", block: "start" }); };
     g.appendChild(b);
   });
   $("sDone").textContent = `${PUZ.filter(p=>store.done[p.id]).length}/${PUZ.length}`;
