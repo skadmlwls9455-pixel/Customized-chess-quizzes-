@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>체스 오답노트 · 내가 진 판으로 만드는 퍼즐</title>
+<meta name="description" content="Chess.com 아이디만 넣으면, 내가 실제로 진 판에서 승부가 갈린 순간을 퍼즐로 만들어 줘.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="top">
+  <div class="logo"><i id="logoIc"></i>체스 오답노트</div>
+  <div class="tabs hidden" id="tabs">
+    <button data-tab="puzzle" class="on">퍼즐</button>
+    <button data-tab="report">리포트</button>
+    <button data-tab="home">다른 아이디</button>
+  </div>
+</div>
+
+<!-- landing -->
+<section class="landing" id="landing">
+  <h1>내가 진 판이<br>제일 좋은 퍼즐이야</h1>
+  <p class="lead">Chess.com 아이디를 넣으면 최근에 진 판을 엔진으로 분석해서, 승부가 갈린 바로 그 순간을 퍼즐로 만들어 줘. 그때 둔 수를 또 두면 "손버릇"으로 잡아내.</p>
+  <div class="box">
+    <form class="field" id="form">
+      <input id="user" placeholder="Chess.com 아이디" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="btn green" style="flex:none;font-size:15px;padding:12px 16px" type="submit">시작</button>
+    </form>
+    <div class="opts">
+      <label>진 판 <select id="nLoss"><option>20</option><option selected>30</option><option>50</option></select>개</label>
+      <label><input type="checkbox" value="rapid" class="tc" checked>래피드</label>
+      <label><input type="checkbox" value="blitz" class="tc" checked>블리츠</label>
+      <label><input type="checkbox" value="bullet" class="tc">불릿</label>
+      <label><input type="checkbox" value="daily" class="tc">데일리</label>
+      <label>분석 <select id="quality"><option value="fast">빠르게</option><option value="normal" selected>보통</option><option value="deep">꼼꼼하게</option></select></label>
+    </div>
+    <div class="err" id="err"></div>
+    <div class="saved" id="saved"></div>
+    <div class="small">
+      분석은 전부 네 브라우저 안에서 돌아가고, 기록은 이 기기에만 저장돼. 보통 설정으로 진 판 30개에 몇 분 걸려.<br>
+      Chess.com이 아니거나 불러오기가 안 되면 PGN 파일을 올려도 돼:
+      <label style="cursor:pointer;text-decoration:underline">PGN 파일 선택<input type="file" id="pgnFile" accept=".pgn,.txt" hidden></label>
+    </div>
+  </div>
+</section>
+
+<!-- progress -->
+<section class="prog hidden" id="progress">
+  <h2 id="progTitle">기록 불러오는 중…</h2>
+  <div class="bar"><div id="progBar"></div></div>
+  <div class="sub" id="progSub"></div>
+  <button class="btn" style="margin-top:22px;display:inline-flex;flex:none;padding:9px 18px" id="cancelBtn">그만하고 지금까지만 보기</button>
+</section>
+
+<!-- puzzles -->
+<div class="app hidden" id="puzzleView">
+  <div class="bcol">
+    <div class="player"><div class="av" id="oppAv"></div><span class="nm" id="oppName"></span></div>
+    <div class="boardwrap">
+      <div class="board" id="board"></div>
+      <div class="promo" id="promo"></div>
+    </div>
+    <div class="player"><div class="av" id="meAv"></div><span class="nm" id="meName"></span></div>
+  </div>
+  <div>
+    <div class="panel">
+      <div class="ptop" id="ptop"><div class="ic" id="pic"></div><div id="ptxt"></div></div>
+      <div class="pbody">
+        <div class="meta"><span id="meta"></span><a id="glink" href="#" target="_blank" rel="noopener">원래 판 ↗</a></div>
+        <div class="tags" id="tags"></div>
+        <div class="msg" id="msg"></div>
+        <div class="explain" id="explain"></div>
+        <div class="btnrow">
+          <button class="btn sm" id="hintBtn">💡 힌트</button>
+          <button class="btn sm" id="showBtn">정답 보기</button>
+          <button class="btn sm" id="playedBtn">내가 둔 수</button>
+        </div>
+        <button class="btn green" id="nextBtn">다음 퍼즐</button>
+      </div>
+      <div class="pfoot">
+        <button id="prevBtn">← 이전</button>
+        <span id="count"></span>
+        <button id="retryBtn">↻ 다시</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="stats">
+        <div class="stat"><b id="sDone">0</b><span>푼 퍼즐</span></div>
+        <div class="stat"><b id="sClean">0</b><span>한 번에 맞힘</span></div>
+        <div class="stat"><b id="sHabit">0</b><span>손버릇 재현</span></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>분류</h3>
+      <div class="filters" id="filters"></div>
+      <div class="grid" id="grid"></div>
+      <div class="credit">빨간 밑줄 = 실제로 졌던 수를 또 둔 퍼즐 · 엔진: Stockfish (GPLv3) · 기물: cburnett (CC BY-SA 3.0)</div>
+    </div>
+  </div>
+</div>
+
+<!-- report -->
+<section class="report hidden" id="reportView"></section>
+
+<script type="module" src="src/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{
+  "name": "chess-mistake-notes",
+  "private": true,
+  "type": "module",
+  "description": "체스 오답노트 — Chess.com 아이디로 내가 진 판에서 퍼즐을 만들어 주는 웹앱",
+  "license": "GPL-3.0-or-later"
+}
