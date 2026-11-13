@@ -53,7 +53,7 @@ function renderSaved(){
   savedUsers().forEach(u => {
     const c = readCache(u); if (!c) return;
     const b = document.createElement("button");
-    b.textContent = `${u} · 퍼즐 ${c.puzzles.length}개 이어서`;
+    b.textContent = `${u} · 퍼즐 ${c.puzzles.length}개 · 이어 보기`;
     b.onclick = () => openCache(u, c);
     el.appendChild(b);
   });
@@ -70,7 +70,7 @@ function openCache(u, c){
 
 /* ---------- analysis pipeline ---------- */
 let cancelled = false, engine = null, running = false;
-$("cancelBtn").onclick = () => { cancelled = true; $("progSub").textContent = "정리하는 중…"; };
+$("cancelBtn").onclick = () => { cancelled = true; $("progSub").textContent = "정리하는 중"; };
 
 async function run(user, getGames){
   if (running) return;
@@ -87,7 +87,7 @@ async function runInner(user, getGames){
   try { games = await getGames(msg => $("progSub").textContent = msg); }
   catch (e){ show("home"); $("err").textContent = e.message || String(e); return; }
   const losses = games.filter(g => g.res === "L");
-  if (!losses.length){ show("home"); $("err").textContent = "이 조건으로는 진 판이 없어. 시간 종류를 더 골라 봐."; return; }
+  if (!losses.length){ show("home"); $("err").textContent = "조건에 맞는 패배한 판이 없습니다. 시간 종류를 더 선택해 보세요."; return; }
   const prev = readCache(user);
   const done = new Set(prev ? prev.analyzed || [] : []);
   const puzzles = prev ? prev.puzzles.slice() : [];
@@ -96,11 +96,11 @@ async function runInner(user, getGames){
   USER = user;
   CACHE = { user, puzzles, analyzed: [...done], games: games.map(g => ({ts: g.ts, res: g.res})), progress: prev ? prev.progress : null, at: Date.now() };
   store = Object.assign({done:{}, clean:{}, habit:{}}, CACHE.progress || {});
-  $("progTitle").textContent = todo.length ? `진 판 ${todo.length}개 분석 중` : "이미 분석한 판이야";
+  $("progTitle").textContent = todo.length ? `패배한 판 ${todo.length}개 분석 중` : "이미 분석한 판입니다";
   if (todo.length){
-    $("progSub").textContent = "엔진 준비 중…";
+    $("progSub").textContent = "엔진 준비 중";
     try { if (!engine || engine.dead) engine = new Engine(); await engine.ready; }
-    catch (e){ engine = null; show("home"); $("err").textContent = "엔진을 불러오지 못했어. 브라우저를 최신으로 업데이트하거나 다른 브라우저로 해 봐. (" + e.message + ")"; return; }
+    catch (e){ engine = null; show("home"); $("err").textContent = "엔진을 불러오지 못했습니다. 브라우저를 업데이트하거나 다른 브라우저를 사용하세요. (" + e.message + ")"; return; }
   }
   const t0 = Date.now();
   for (let i = 0; i < todo.length && !cancelled; i++){
@@ -118,7 +118,7 @@ async function runInner(user, getGames){
       CACHE.analyzed.push(g.link || String(g.ts));
     } catch (e){
       console.warn("skip game", g.link, e);
-      if (engine && engine.dead){ $("err").textContent = "분석 중 엔진이 멈췄어. 지금까지 만든 퍼즐만 보여 줄게."; break; }
+      if (engine && engine.dead){ $("err").textContent = "분석 중 엔진이 멈췄습니다. 지금까지 만든 퍼즐을 표시합니다."; break; }
     }
     puzzles.sort((a, b) => b.date.localeCompare(a.date));
     CACHE.puzzles = puzzles; writeCache();
@@ -130,11 +130,11 @@ async function runInner(user, getGames){
 $("form").addEventListener("submit", e => {
   e.preventDefault();
   const raw = $("user").value.trim();
-  if (!raw){ $("err").textContent = "아이디를 입력해 줘."; return; }
+  if (!raw){ $("err").textContent = "아이디를 입력하세요."; return; }
   const user = normalizeUser(raw);
-  if (!user){ $("err").textContent = "아이디 형식이 이상해. Chess.com 아이디나 프로필 주소를 넣어 줘."; return; }
+  if (!user){ $("err").textContent = "아이디 형식이 올바르지 않습니다. Chess.com 아이디나 프로필 주소를 입력하세요."; return; }
   const tcs = [...document.querySelectorAll(".tc:checked")].map(x => x.value);
-  if (!tcs.length){ $("err").textContent = "시간 종류를 하나 이상 골라 줘."; return; }
+  if (!tcs.length){ $("err").textContent = "시간 종류를 하나 이상 선택하세요."; return; }
   const want = +$("nLoss").value;
   run(user, onProgress => fetchChessCom(user, { timeClasses: tcs, wantLosses: want, onProgress }).then(gs => {
     // keep games up to the oldest of the wanted losses
@@ -147,12 +147,12 @@ $("pgnFile").addEventListener("change", async e => {
   const f = e.target.files[0]; if (!f) return;
   const raw = $("user").value.trim();
   const user = normalizeUser(raw) || raw.toLowerCase();
-  if (!raw){ $("err").textContent = "PGN 속 내 아이디를 먼저 입력해 줘."; e.target.value = ""; return; }
+  if (!raw){ $("err").textContent = "PGN에 기록된 내 아이디를 먼저 입력하세요."; e.target.value = ""; return; }
   const text = await f.text();
   const want = +$("nLoss").value;
   run(user, async () => {
     const gs = parsePgnFile(text, user);
-    if (!gs.length) throw new Error("PGN에서 이 아이디가 둔 판을 찾지 못했어.");
+    if (!gs.length) throw new Error("PGN에서 이 아이디의 판을 찾지 못했습니다.");
     let n = 0, cut = gs.length;
     for (let i = 0; i < gs.length; i++){ if (gs[i].res === "L" && ++n === want){ cut = i + 1; break; } }
     return gs.slice(0, cut);
