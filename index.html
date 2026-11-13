@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>체스 오답노트 · 내가 진 판으로 만드는 퍼즐</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chess Mistake Notes · 체스 오답노트</title>
 <meta name="author" content="Katherine Nahm">
-<meta name="description" content="Chess.com 아이디로 최근 패배한 판에서 승부가 갈린 순간을 퍼즐로 만들어요.">
+<meta name="description" content="Turn the turning points of your lost Chess.com games into puzzles. 내가 진 판으로 만드는 오답 퍼즐.">
+<meta name="theme-color" content="#302e2b">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;600;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
@@ -13,47 +14,48 @@
 <body>
 
 <div class="top">
-  <div class="logo"><i id="logoIc"></i>체스 오답노트</div>
+  <div class="logo"><i id="logoIc"></i><span data-i18n="app">체스 오답노트</span></div>
   <div class="tabs hidden" id="tabs">
-    <button data-tab="puzzle" class="on">퍼즐</button>
-    <button data-tab="report">리포트</button>
-    <button data-tab="home">다른 아이디</button>
+    <button data-tab="puzzle" class="on" data-i18n="tab.puzzle">퍼즐</button>
+    <button data-tab="report" data-i18n="tab.report">리포트</button>
+    <button data-tab="home" data-i18n="tab.home">다른 아이디</button>
   </div>
 </div>
 
 <!-- landing -->
 <section class="landing" id="landing">
-  <h1>진 판으로 만드는<br>나만의 오답 퍼즐</h1>
-  <p class="lead">Chess.com 아이디를 입력하면 최근 패배한 판을 엔진으로 분석해 승부가 갈린 순간을 퍼즐로 만들어요. 당시 둔 수를 다시 두면 손버릇으로 표시해요.</p>
+  <h1 data-i18n-html="hero"></h1>
+  <p class="lead" data-i18n="lead"></p>
   <div class="box">
     <form class="field" id="form">
-      <input id="user" placeholder="Chess.com 아이디" autocomplete="off" autocapitalize="off" spellcheck="false">
-      <button class="btn green" style="flex:none;font-size:15px;padding:12px 16px" type="submit">시작</button>
+      <input id="user" data-i18n-ph="ph.user" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+      <button class="btn green start" type="submit" data-i18n="btn.start">시작</button>
     </form>
     <div class="opts">
-      <label>진 판 <select id="nLoss"><option>20</option><option selected>30</option><option>50</option></select>개</label>
-      <label><input type="checkbox" value="rapid" class="tc" checked>래피드</label>
-      <label><input type="checkbox" value="blitz" class="tc" checked>블리츠</label>
-      <label><input type="checkbox" value="bullet" class="tc">불릿</label>
-      <label><input type="checkbox" value="daily" class="tc">데일리</label>
-      <label>분석 <select id="quality"><option value="fast">빠르게</option><option value="normal" selected>보통</option><option value="deep">꼼꼼하게</option></select></label>
+      <label><span data-i18n="opt.losses"></span> <select id="nLoss"><option>20</option><option selected>30</option><option>50</option></select><span data-i18n="opt.count"></span></label>
+      <label><input type="checkbox" value="rapid" class="tc" checked><span data-i18n="tc.rapid"></span></label>
+      <label><input type="checkbox" value="blitz" class="tc" checked><span data-i18n="tc.blitz"></span></label>
+      <label><input type="checkbox" value="bullet" class="tc"><span data-i18n="tc.bullet"></span></label>
+      <label><input type="checkbox" value="daily" class="tc"><span data-i18n="tc.daily"></span></label>
+      <label><span data-i18n="opt.quality"></span> <select id="quality"><option value="fast" data-i18n="q.fast"></option><option value="normal" selected data-i18n="q.normal"></option><option value="deep" data-i18n="q.deep"></option></select></label>
     </div>
     <div class="err" id="err"></div>
     <div class="saved" id="saved"></div>
     <div class="small">
-      분석은 브라우저 안에서 진행되고 기록은 이 기기에만 저장돼요. 보통 설정 기준 30판에 몇 분 걸려요.<br>
-      Chess.com 외 기록이거나 불러오기가 안 될 때는 PGN 파일을 사용해 주세요:
-      <label style="cursor:pointer;text-decoration:underline">PGN 파일 선택<input type="file" id="pgnFile" accept=".pgn,.txt" hidden></label>    </div>
+      <span data-i18n="note.privacy"></span><br>
+      <span data-i18n="note.pgn"></span>
+      <label class="pgnpick"><span data-i18n="pgn.pick"></span><input type="file" id="pgnFile" accept=".pgn,.txt" hidden></label>
+    </div>
   </div>
 </section>
 
 <!-- progress -->
 <section class="prog hidden" id="progress">
-  <h2 id="progTitle">기록 불러오는 중</h2>
+  <h2 id="progTitle"></h2>
   <div class="bar"><div id="progBar"></div></div>
   <div class="sub" id="progSub"></div>
-  <div class="small">모바일에서는 분석이 끝날 때까지 화면을 켜 두세요. 화면이 꺼지면 분석이 멈춰요.</div>
-  <button class="btn" style="margin-top:22px;display:inline-flex;flex:none;padding:9px 18px" id="cancelBtn">중단하고 결과 보기</button>
+  <div class="small" data-i18n="prog.screen"></div>
+  <button class="btn cancel" id="cancelBtn" data-i18n="prog.cancel"></button>
 </section>
 
 <!-- puzzles -->
@@ -66,39 +68,39 @@
     </div>
     <div class="player"><div class="av" id="meAv"></div><span class="nm" id="meName"></span></div>
   </div>
-  <div>
+  <div class="side">
     <div class="panel">
       <div class="ptop" id="ptop"><div class="ic" id="pic"></div><div id="ptxt"></div></div>
       <div class="pbody">
-        <div class="meta"><span id="meta"></span><a id="glink" href="#" target="_blank" rel="noopener">원래 판 ↗</a></div>
+        <div class="meta"><span id="meta"></span><a id="glink" href="#" target="_blank" rel="noopener" data-i18n="game.link"></a></div>
         <div class="tags" id="tags"></div>
         <div class="msg" id="msg"></div>
         <div class="explain" id="explain"></div>
         <div class="btnrow">
-          <button class="btn sm" id="hintBtn">💡 힌트</button>
-          <button class="btn sm" id="showBtn">정답 보기</button>
-          <button class="btn sm" id="playedBtn">내가 둔 수</button>
+          <button class="btn sm" id="hintBtn" data-i18n="btn.hint"></button>
+          <button class="btn sm" id="showBtn" data-i18n="btn.show"></button>
+          <button class="btn sm" id="playedBtn" data-i18n="btn.played"></button>
         </div>
-        <button class="btn green" id="nextBtn">다음 퍼즐</button>
+        <button class="btn green" id="nextBtn" data-i18n="btn.next"></button>
       </div>
       <div class="pfoot">
-        <button id="prevBtn">← 이전</button>
+        <button id="prevBtn" data-i18n="btn.prev"></button>
         <span id="count"></span>
-        <button id="retryBtn">↻ 다시</button>
+        <button id="retryBtn" data-i18n="btn.retry"></button>
       </div>
     </div>
     <div class="card">
       <div class="stats">
-        <div class="stat"><b id="sDone">0</b><span>푼 퍼즐</span></div>
-        <div class="stat"><b id="sClean">0</b><span>한 번에 맞힘</span></div>
-        <div class="stat"><b id="sHabit">0</b><span>손버릇 재현</span></div>
+        <div class="stat"><b id="sDone">0</b><span data-i18n="stat.done"></span></div>
+        <div class="stat"><b id="sClean">0</b><span data-i18n="stat.clean"></span></div>
+        <div class="stat"><b id="sHabit">0</b><span data-i18n="stat.habit"></span></div>
       </div>
     </div>
     <div class="card">
-      <h3>분류</h3>
+      <h3 data-i18n="side.filters"></h3>
       <div class="filters" id="filters"></div>
       <div class="grid" id="grid"></div>
-      <div class="credit">빨간 밑줄 = 실제로 졌던 수를 다시 둔 퍼즐</div>
+      <div class="credit" data-i18n="side.legend"></div>
     </div>
   </div>
 </div>
@@ -106,7 +108,10 @@
 <!-- report -->
 <section class="report hidden" id="reportView"></section>
 
-<footer class="foot">© 2026 Katherine Nahm · <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GPLv3</a> · Engine: Stockfish · Pieces: cburnett (CC BY-SA 3.0)</footer>
+<footer class="foot">
+  <div class="langs"><button data-lang="ko">한국어</button> · <button data-lang="en">English</button></div>
+  © 2026 Katherine Nahm · <a href="https://www.gnu.org/licenses/gpl-3.0.html" target="_blank" rel="noopener">GPLv3</a> · <a href="https://github.com/skadmlwls9455-pixel/customized-chess-quizzes-" target="_blank" rel="noopener">Source</a> · Engine: Stockfish · Pieces: cburnett (CC BY-SA 3.0)
+</footer>
 
 <script type="module" src="src/app.js"></script>
 </body>

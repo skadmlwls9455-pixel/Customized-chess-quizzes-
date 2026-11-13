@@ -1,3 +1,50 @@
+# Chess Mistake Notes ♞
+
+> Your lost games are your best puzzles.
+
+Enter your Chess.com username. The app analyzes your recent **losses** with Stockfish, finds the move where each game slipped away, and turns that position into a puzzle. Not random tactics: the exact spots **you** got wrong.
+
+**English · [한국어](#체스-오답노트-)**
+
+## Features
+
+- **One puzzle per lost game, at the turning point**: the position right before your first move that dropped the evaluation by 2+ pawns. Some puzzles continue for 2–3 moves.
+- **Habit detection**: replay the move you actually lost with and it says *"That's the move you played"* and files the puzzle under **Habits**.
+- **Filters**: hung piece · opening · missed capture · thrown win · mate · unsolved · habits
+- **Tilt report**: loss rate after two losses in a row, early collapses, hung pieces, with tailored advice
+- Drag & drop or tap-to-move, legal-move dots, promotion picker, mobile / tablet / desktop layouts
+- Korean and English UI (follows your browser, switchable in the footer)
+- PGN upload for games from other sites (e.g. Lichess)
+
+## How it works
+
+- No server-side analysis: everything runs **in your browser** with the [Stockfish.js](https://github.com/nmrugg/stockfish.js) lite single-threaded WASM build.
+- Games come from the [Chess.com public API](https://www.chess.com/news/view/published-data-api). If the browser can't reach it directly, `api/chesscom.js` (a Vercel serverless function) fetches it instead. It only allows player game-archive paths.
+- Results and progress are stored in your device's `localStorage`. Games you've already analyzed are skipped next time.
+
+## Run locally
+
+Static site, no build step.
+
+```bash
+python3 -m http.server 8000
+# → http://localhost:8000
+```
+
+### Deploy to Vercel
+
+Add New → Project → import this repo → Framework Preset **Other** → Deploy. `api/chesscom.js` becomes a serverless function automatically.
+
+## License
+
+Copyright (C) 2026 Katherine Nahm. Licensed under **GPL-3.0-or-later** (see `LICENSE`), because Stockfish is GPLv3.
+
+Third-party: Stockfish / Stockfish.js (GPLv3), chess.js (BSD-2-Clause), cburnett pieces by Colin M.L. Burnett via lichess-org/chessground (CC BY-SA 3.0).
+
+Not affiliated with Chess.com.
+
+---
+
 # 체스 오답노트 ♞
 
 > 내가 진 판이 제일 좋은 퍼즐이야.

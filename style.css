@@ -129,3 +129,39 @@ html,body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);font-
 body{min-height:100vh;min-height:100dvh;display:flex;flex-direction:column}
 body > .top,body > section,body > .app{width:100%}
 .foot{margin-top:auto;width:100%}
+/* --- layout polish (desktop / tablet / phone / landscape) --- */
+.btn.start{flex:none;font-size:15px;padding:12px 18px}
+.btn.cancel{margin-top:22px;display:inline-flex;flex:none;padding:9px 18px}
+.pgnpick{cursor:pointer;text-decoration:underline;white-space:nowrap}
+.langs{margin-bottom:6px}
+.langs button{background:none;border:none;color:#8b8987;font:inherit;font-size:12px;cursor:pointer;padding:2px 4px}
+.langs button.on{color:#fff;font-weight:700}
+.bcol{align-items:center}
+.bcol .player{width:100%;max-width:inherit}
+.boardwrap,.bcol .player{max-width:min(100%, calc(100dvh - 150px))}
+@supports not (height:100dvh){.boardwrap,.bcol .player{max-width:min(100%, calc(100vh - 150px))}}
+.bcol{display:flex;flex-direction:column}
+.bcol > *{width:100%}
+.side{min-width:0}
+@media (max-width:900px){
+  .boardwrap,.bcol .player{max-width:min(100%, calc(100dvh - 120px))}
+  .bcol{align-items:center}
+}
+/* landscape phones: put board and panel side by side */
+@media (max-width:900px) and (orientation:landscape) and (max-height:520px){
+  .app{grid-template-columns:minmax(0,1fr) minmax(260px,1fr)}
+  .boardwrap,.bcol .player{max-width:calc(100dvh - 90px)}
+  .landing{margin-top:2vh}
+}
+.app{padding-left:max(16px, env(safe-area-inset-left));padding-right:max(16px, env(safe-area-inset-right))}
+@media (max-width:900px){.app{padding-left:max(8px, env(safe-area-inset-left));padding-right:max(8px, env(safe-area-inset-right))}}
+.foot{padding-bottom:max(22px, env(safe-area-inset-bottom))}
+.btn,.chip,.tabs button,.grid button{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+input,select{font-size:16px}
+.opts select{font-size:14px}
+@media (max-width:560px){body.inapp .logo span{display:none}}
+/* tablets: board + narrower side panel */
+@media (min-width:700px) and (max-width:900px){
+  .app{grid-template-columns:minmax(0,1fr) 300px}
+  .btn.sm{font-size:12.5px}
+}

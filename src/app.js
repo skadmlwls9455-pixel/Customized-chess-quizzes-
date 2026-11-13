@@ -6,6 +6,10 @@ import { PIECE } from "./pieces.js";
 import { Engine } from "./engine.js";
 import { fetchChessCom, parsePgnFile, normalizeUser } from "./data.js";
 import { findDecisiveMove, buildPuzzle, buildReport } from "./analyze.js";
+import { t, LANG, setLang, applyStatic } from "./i18n.js";
+
+applyStatic();
+document.querySelectorAll(".langs button").forEach(b => { b.classList.toggle("on", b.dataset.lang === LANG); b.onclick = () => setLang(b.dataset.lang); });
 
 const FILES = "abcdefgh";
 const FILTERS = ["전체","안 푼 것","손버릇","기물 흘림","오프닝","잡을 수 있었음","이기던 판 놓침","메이트 있음"];
@@ -37,6 +41,7 @@ function show(name){
   for (const [id, n] of [["landing","home"],["progress","progress"],["puzzleView","puzzle"],["reportView","report"]])
     $(id).classList.toggle("hidden", n !== name);
   $("tabs").classList.toggle("hidden", !(name === "puzzle" || name === "report"));
+  document.body.classList.toggle("inapp", name === "puzzle" || name === "report");
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
   window.scrollTo(0, 0);
 }
@@ -53,7 +58,7 @@ function renderSaved(){
   savedUsers().forEach(u => {
     const c = readCache(u); if (!c) return;
     const b = document.createElement("button");
-    b.textContent = `${u} · 퍼즐 ${c.puzzles.length}개 · 이어 보기`;
+    b.textContent = t("saved", {u, n: c.puzzles.length});
     b.onclick = () => openCache(u, c);
     el.appendChild(b);
   });
@@ -70,7 +75,7 @@ function openCache(u, c){
 
 /* ---------- analysis pipeline ---------- */
 let cancelled = false, engine = null, running = false;
-$("cancelBtn").onclick = () => { cancelled = true; $("progSub").textContent = "정리하는 중"; };
+$("cancelBtn").onclick = () => { cancelled = true; $("progSub").textContent = t("prog.wrap"); };
 
 async function run(user, getGames){
   if (running) return;
@@ -82,31 +87,33 @@ async function runInner(user, getGames){
   $("err").textContent = "";
   cancelled = false;
   show("progress");
-  $("progTitle").textContent = "기록 불러오는 중…"; $("progBar").style.width = "0%"; $("progSub").textContent = "";
+  $("progTitle").textContent = t("prog.loading"); $("progBar").style.width = "0%"; $("progSub").textContent = "";
   let games;
   try { games = await getGames(msg => $("progSub").textContent = msg); }
   catch (e){ show("home"); $("err").textContent = e.message || String(e); return; }
   const losses = games.filter(g => g.res === "L");
-  if (!losses.length){ show("home"); $("err").textContent = "조건에 맞는 패배한 판이 없어요. 시간 종류를 더 선택해 보세요."; return; }
+  if (!losses.length){ show("home"); $("err").textContent = t("err.noLoss"); return; }
   const prev = readCache(user);
   const done = new Set(prev ? prev.analyzed || [] : []);
   const puzzles = prev ? prev.puzzles.slice() : [];
   const todo = losses.filter(g => !done.has(g.link || String(g.ts)));
   const [d1, d2] = QUALITY[$("quality").value] || QUALITY.normal;
-  USER = user;
-  CACHE = { user, puzzles, analyzed: [...done], games: games.map(g => ({ts: g.ts, res: g.res})), progress: prev ? prev.progress : null, at: Date.now() };
+  const g0 = games[0];
+  const display = g0 ? (g0.me === "w" ? g0.white : g0.black) || user : user;
+  USER = display;
+  CACHE = { user: display, puzzles, analyzed: [...done], games: games.map(g => ({ts: g.ts, res: g.res})), progress: prev ? prev.progress : null, at: Date.now() };
   store = Object.assign({done:{}, clean:{}, habit:{}}, CACHE.progress || {});
-  $("progTitle").textContent = todo.length ? `패배한 판 ${todo.length}개 분석 중` : "이미 분석한 판이에요";
+  $("progTitle").textContent = todo.length ? t("prog.analyzing", {n: todo.length}) : t("prog.cached");
   if (todo.length){
-    $("progSub").textContent = "엔진 준비 중";
+    $("progSub").textContent = t("prog.engine");
     try { if (!engine || engine.dead) engine = new Engine(); await engine.ready; }
-    catch (e){ engine = null; show("home"); $("err").textContent = "엔진을 불러오지 못했어요. 브라우저를 업데이트하거나 다른 브라우저로 시도해 주세요. (" + e.message + ")"; return; }
+    catch (e){ engine = null; show("home"); $("err").textContent = t("err.engine") + " (" + e.message + ")"; return; }
   }
   const t0 = Date.now();
   for (let i = 0; i < todo.length && !cancelled; i++){
     const g = todo[i];
     const left = i ? Math.round((Date.now() - t0) / i * (todo.length - i) / 1000) : null;
-    $("progSub").textContent = `${i+1}/${todo.length} · vs ${g.me === "w" ? g.black : g.white}` + (left !== null ? ` · 약 ${left >= 60 ? Math.round(left/60) + "분" : left + "초"} 남음` : "");
+    $("progSub").textContent = `${i+1}/${todo.length} · vs ${g.me === "w" ? g.black : g.white}` + (left !== null ? t("prog.left", {t: left >= 60 ? t("unit.min", {n: Math.round(left/60)}) : t("unit.sec", {n: left})}) : "");
     $("progBar").style.width = (100 * i / todo.length) + "%";
     try {
       const d = await findDecisiveMove(engine, g, d1, () => cancelled);
@@ -118,7 +125,7 @@ async function runInner(user, getGames){
       CACHE.analyzed.push(g.link || String(g.ts));
     } catch (e){
       console.warn("skip game", g.link, e);
-      if (engine && engine.dead){ $("err").textContent = "분석 중 엔진이 멈췄어요. 지금까지 만든 퍼즐을 보여 드릴게요."; break; }
+      if (engine && engine.dead){ $("err").textContent = t("err.engineDied"); break; }
     }
     puzzles.sort((a, b) => b.date.localeCompare(a.date));
     CACHE.puzzles = puzzles; writeCache();
@@ -130,11 +137,11 @@ async function runInner(user, getGames){
 $("form").addEventListener("submit", e => {
   e.preventDefault();
   const raw = $("user").value.trim();
-  if (!raw){ $("err").textContent = "아이디를 입력해 주세요."; return; }
+  if (!raw){ $("err").textContent = t("err.empty"); return; }
   const user = normalizeUser(raw);
-  if (!user){ $("err").textContent = "아이디 형식이 올바르지 않아요. Chess.com 아이디나 프로필 주소를 입력해 주세요."; return; }
+  if (!user){ $("err").textContent = t("err.badId"); return; }
   const tcs = [...document.querySelectorAll(".tc:checked")].map(x => x.value);
-  if (!tcs.length){ $("err").textContent = "시간 종류를 하나 이상 선택해 주세요."; return; }
+  if (!tcs.length){ $("err").textContent = t("err.noTc"); return; }
   const want = +$("nLoss").value;
   run(user, onProgress => fetchChessCom(user, { timeClasses: tcs, wantLosses: want, onProgress }).then(gs => {
     // keep games up to the oldest of the wanted losses
@@ -147,12 +154,12 @@ $("pgnFile").addEventListener("change", async e => {
   const f = e.target.files[0]; if (!f) return;
   const raw = $("user").value.trim();
   const user = normalizeUser(raw) || raw.toLowerCase();
-  if (!raw){ $("err").textContent = "PGN에 기록된 내 아이디를 먼저 입력해 주세요."; e.target.value = ""; return; }
+  if (!raw){ $("err").textContent = t("err.pgnId"); e.target.value = ""; return; }
   const text = await f.text();
   const want = +$("nLoss").value;
   run(user, async () => {
     const gs = parsePgnFile(text, user);
-    if (!gs.length) throw new Error("PGN에서 이 아이디의 판을 찾지 못했어요.");
+    if (!gs.length) throw new Error(t("err.pgnNone"));
     let n = 0, cut = gs.length;
     for (let i = 0; i < gs.length; i++){ if (gs[i].res === "L" && ++n === want){ cut = i + 1; break; } }
     return gs.slice(0, cut);
@@ -164,25 +171,25 @@ $("pgnFile").addEventListener("change", async e => {
 function pct(a, b){ return b ? Math.round(100 * a / b) + "%" : "-"; }
 function renderReport(){
   const r = REPORT; if (!r) return;
-  const t = r.total;
+  const tt = r.total;
   const rules = [];
   if (r.after2.n >= 4 && r.after2.L / r.after2.n > r.fresh.L / Math.max(r.fresh.n, 1) + 0.1)
-    rules.push(`<b>2연패하면 10분 쉬어요.</b> 평소 다음 판 패배율은 ${pct(r.fresh.L, r.fresh.n)}인데, 같은 세션에서 2연패한 뒤에는 ${pct(r.after2.L, r.after2.n)}로 올라가요.`);
-  else rules.push(`<b>연패해도 크게 무너지지 않는 편이에요.</b> 2연패 뒤 패배율 ${pct(r.after2.L, r.after2.n)} (평소 ${pct(r.fresh.L, r.fresh.n)}). 그래도 3연패면 쉬는 게 좋아요.`);
-  if (r.nPuz && r.early / r.nPuz >= 0.4) rules.push(`<b>초반 10수가 가장 위험해요.</b> 승부가 갈린 순간의 ${pct(r.early, r.nPuz)}가 10수 안에서 나왔어요. "오프닝" 분류 퍼즐부터 풀어 보세요.`);
-  if (r.nPuz && r.hung / r.nPuz >= 0.4) rules.push(`<b>기물을 공짜로 내주는 게 가장 큰 문제예요.</b> ${r.hung}판이 그렇게 기울었어요. 두기 전에 "이 기물을 누가 잡을 수 있지?"만 확인해도 크게 줄어요.`);
-  if (r.thrown) rules.push(`<b>이기던 판을 ${r.thrown}번 놓쳤어요.</b> 앞서 있을 때는 기물을 맞교환해 판을 단순하게 만드세요.`);
-  if (r.missed) rules.push(`<b>상대 실수를 놓친 판이 ${r.missed}개예요.</b> 상대가 방금 둔 수로 어디가 비었는지 한 번씩 확인해 보세요.`);
+    rules.push(t("rep.tilt", {a: pct(r.fresh.L, r.fresh.n), b: pct(r.after2.L, r.after2.n)}));
+  else rules.push(t("rep.noTilt", {a: pct(r.fresh.L, r.fresh.n), b: pct(r.after2.L, r.after2.n)}));
+  if (r.nPuz && r.early / r.nPuz >= 0.4) rules.push(t("rep.early", {p: pct(r.early, r.nPuz)}));
+  if (r.nPuz && r.hung / r.nPuz >= 0.4) rules.push(t("rep.hung", {n: r.hung}));
+  if (r.thrown) rules.push(t("rep.thrown", {n: r.thrown}));
+  if (r.missed) rules.push(t("rep.missed", {n: r.missed}));
   $("reportView").innerHTML = `
-    <h2>${esc(USER)}의 리포트</h2>
+    <h2>${t("rep.title", {u: esc(USER)})}</h2>
     <div class="rgrid">
-      <div class="rcard"><b>${t.n}</b><span>불러온 판 (${t.W}승 ${t.D}무 ${t.L}패)</span></div>
-      <div class="rcard"><b>${r.nPuz}</b><span>만든 오답 퍼즐</span></div>
-      <div class="rcard"><b>${r.longest}</b><span>최장 연패</span></div>
-      <div class="rcard"><b>${pct(r.after2.L, r.after2.n)}</b><span>2연패 뒤 다음 판 패배율</span></div>
+      <div class="rcard"><b>${tt.n}</b><span>${t("rep.games", {w: tt.W, d: tt.D, l: tt.L})}</span></div>
+      <div class="rcard"><b>${r.nPuz}</b><span>${t("rep.puzzles")}</span></div>
+      <div class="rcard"><b>${r.longest}</b><span>${t("rep.streak")}</span></div>
+      <div class="rcard"><b>${pct(r.after2.L, r.after2.n)}</b><span>${t("rep.after2")}</span></div>
     </div>
     <div class="advice"><ul style="margin:0;padding-left:18px">${rules.map(x => `<li>${x}</li>`).join("")}</ul></div>
-    <div class="small">패배한 판마다 엔진 평가가 처음으로 폰 2개 이상 떨어진 내 수를 "승부가 갈린 수"로 봤어요. 빠른 분석이라 숫자는 경향으로만 참고해 주세요.</div>`;
+    <div class="small">${t("rep.note")}</div>`;
 }
 
 /* ---------- puzzle view ---------- */
@@ -206,7 +213,7 @@ function renderSide(){
     if (!n && !["안 푼 것","손버릇"].includes(name)) return;
     const b = document.createElement("button");
     b.className = "chip" + (name === filter ? " on" : "");
-    b.textContent = `${name} ${n}`;
+    b.textContent = `${t("f." + name)} ${n}`;
     b.onclick = () => { const cur = view[pos]; filter = name; rebuildView(cur); renderSide(); load(); };
     f.appendChild(b);
   });
@@ -228,16 +235,17 @@ function renderSide(){
 }
 
 function setTop(kind, title, sub){
-  const t = $("ptop"); t.className = "ptop " + kind;
+  const top = $("ptop"); top.className = "ptop " + kind;
   const ic = $("pic");
   if (kind === "w" || kind === "b"){ ic.className = "ic"; ic.style.backgroundImage = `url("${PIECE[kind + "k"]}")`; ic.textContent = ""; }
   else { ic.className = "ic circ"; ic.style.backgroundImage = "none"; ic.textContent = kind === "ok" ? "✓" : "✕"; }
   $("ptxt").innerHTML = title + (sub ? `<small>${sub}</small>` : "");
 }
 const msg = h => { $("msg").innerHTML = h; };
+const turnTxt = c => c === "w" ? t("pz.turnW") : t("pz.turnB");
 
 function load(){
-  if (!view.length){ $("board").innerHTML = ""; setTop("ok","다 풀었어요!","이 분류에는 남은 퍼즐이 없어요"); msg(""); renderSide(); return; }
+  if (!view.length){ $("board").innerHTML = ""; setTop("ok", t("pz.allDone"), t("pz.allDoneSub")); msg(""); renderSide(); return; }
   const idx = view[pos], p = PUZ[idx];
   const game = new Chess(p.fen);
   st = {p, idx, game, step:0, sel:null, hint:0, last:p.lastmove, done:false, busy:false, wrongs:0, usedAnswer:false, badge:null, hintSq:[]};
@@ -246,14 +254,14 @@ function load(){
   $("meName").textContent = USER;
   $("oppAv").style.backgroundImage = `url("${PIECE[(meW ? "b" : "w") + "k"]}")`;
   $("meAv").style.backgroundImage = `url("${PIECE[p.me + "k"]}")`;
-  setTop(p.me, `${meW ? "백" : "흑"} 차례`, p.steps.length > 1 ? `최선의 수를 찾아보세요 · 내 수 ${p.steps.length}개` : "최선의 수를 찾아보세요");
-  $("meta").textContent = `${p.date.replaceAll(".","/")} · ${p.moveno}수째`;
+  setTop(p.me, turnTxt(p.me), p.steps.length > 1 ? t("pz.findN", {n: p.steps.length}) : t("pz.find"));
+  $("meta").textContent = t("pz.meta", {d: p.date.replaceAll(".","/"), n: p.moveno});
   $("glink").href = p.link || "#"; $("glink").style.visibility = p.link ? "visible" : "hidden";
-  $("tags").innerHTML = (store.habit[p.id] ? `<span class="tag warn">손버릇</span>` : "") + p.theme.map(t=>`<span class="tag">${t}</span>`).join("");
-  msg("기물을 끌어서 놓거나, 기물을 누른 뒤 갈 칸을 눌러 주세요.");
+  $("tags").innerHTML = (store.habit[p.id] ? `<span class="tag warn">${t("f.손버릇")}</span>` : "") + p.theme.map(x=>`<span class="tag">${t("f." + x)}</span>`).join("");
+  msg(t("pz.howto"));
   $("explain").classList.remove("show");
   $("count").textContent = `${pos+1} / ${view.length}`;
-  $("nextBtn").textContent = "다음 퍼즐";
+  $("nextBtn").textContent = t("btn.next");
   draw(); renderSide();
   }
 
@@ -393,15 +401,15 @@ function attempt(uci){
     st.busy = true;
     if (isPlayed && !st.usedAnswer){
       if (!store.habit[p.id]){ store.habit[p.id] = 1; save(); }
-      setTop("bad", "그때 둔 그 수예요", "손이 먼저 나갔군요. 그래서 다시 푸는 거예요");
-      msg(`실제로 판이 기운 수 <span class="mv">${p.played}</span>예요. 상대는 <span class="mv">${p.refline[0] || "?"}</span>로 받아요. 다시 해 보세요.`);
+      setTop("bad", t("pz.habit"), t("pz.habitSub"));
+      msg(t("pz.habitMsg", {m: `<span class="mv">${p.played}</span>`, r: `<span class="mv">${p.refline[0] || "?"}</span>`}));
     } else {
-      setTop("bad", "틀렸어요", "다시 해 보세요");
-      msg("체크 → 잡기 → 위협 순서로 다시 살펴보세요.");
+      setTop("bad", t("pz.wrong"), t("pz.again"));
+      msg(t("pz.wrongMsg"));
     }
     setTimeout(() => {
       st.game.undo(); st.last = st.step === 0 ? p.lastmove : p.steps[st.step-1].reply; st.badge = null; st.busy = false;
-      setTop(p.me, `${p.me === "w" ? "백" : "흑"} 차례`, "다시 해 보세요"); draw(); renderSide();
+      setTop(p.me, turnTxt(p.me), t("pz.again")); draw(); renderSide();
     }, 900);
     return;
   }
@@ -412,13 +420,13 @@ function attempt(uci){
   st.step++;
   draw();
   if (st.step >= p.steps.length){ finish(true); return; }
-  setTop("ok", isBest ? "최고의 수!" : "좋은 수예요!", "계속 가 볼게요");
-  msg("상대가 응수하는 중…");
+  setTop("ok", isBest ? t("pz.best") : t("pz.good"), t("pz.goOn"));
+  msg(t("pz.replying"));
   st.busy = true;
   setTimeout(() => {
     play(step.reply); st.badge = null; st.busy = false;
-    setTop(p.me, `${p.me === "w" ? "백" : "흑"} 차례`, "다음 수는?");
-    msg("계속해 보세요."); draw();
+    setTop(p.me, turnTxt(p.me), t("pz.next"));
+    msg(t("pz.continue")); draw();
   }, 700);
 }
 
@@ -431,10 +439,10 @@ function finish(solved){
     save();
   }
   if (solved && !st.usedAnswer){
-    setTop("ok", st.wrongs === 0 && st.hint === 0 ? "한 번에 정답! 🔥" : "정답!", "퍼즐 해결");
-    msg(store.habit[p.id] ? "이번에는 손버릇을 이겼어요. 실전에서도 이 장면을 기억해 두세요." : "잘했어요.");
+    setTop("ok", st.wrongs === 0 && st.hint === 0 ? t("pz.clean") : t("pz.solved"), t("pz.solvedSub"));
+    msg(store.habit[p.id] ? t("pz.beatHabit") : t("pz.nice"));
   } else {
-    setTop("bad", "정답 공개", "나중에 다시 풀어 보세요");
+    setTop("bad", t("pz.revealed"), t("pz.later"));
     msg("");
   }
   showExplain(); draw(); renderSide();
@@ -449,14 +457,14 @@ function numbered(arr, startNo, whiteFirst){
   });
   return out.join(" ");
 }
-function evalTxt(v){ if (Math.abs(v) >= 90000) return v > 0 ? "메이트" : "메이트 당함"; return (v > 0 ? "+" : "") + (v/100).toFixed(1); }
+function evalTxt(v){ if (Math.abs(v) >= 90000) return v > 0 ? t("ev.mate") : t("ev.mated"); return (v > 0 ? "+" : "") + (v/100).toFixed(1); }
 function showExplain(){
   const p = st.p, meW = p.me === "w";
   $("explain").innerHTML =
-    `<b>정답 수순</b> <span style="float:right">${evalTxt(p.eval_best)}</span><br><span class="mv">${numbered(p.san_line, p.moveno, meW)}</span><br>` +
-    `<b>실제로 둔 수</b> <span class="mv">${p.played}</span> <span style="float:right">${evalTxt(p.eval_played)}</span><br>` +
-    `상대 응징: <span class="mv">${numbered(p.refline, meW ? p.moveno : p.moveno + 1, !meW)}</span><br>` +
-    `<span style="font-size:12px;color:var(--dim)">평가는 내 기준 · 폰 1개 = 1.0</span>`;
+    `<b>${t("ex.line")}</b> <span style="float:right">${evalTxt(p.eval_best)}</span><br><span class="mv">${numbered(p.san_line, p.moveno, meW)}</span><br>` +
+    `<b>${t("ex.played")}</b> <span class="mv">${p.played}</span> <span style="float:right">${evalTxt(p.eval_played)}</span><br>` +
+    `${t("ex.punish")} <span class="mv">${numbered(p.refline, meW ? p.moveno : p.moveno + 1, !meW)}</span><br>` +
+    `<span style="font-size:12px;color:var(--dim)">${t("ex.note")}</span>`;
   $("explain").classList.add("show");
 }
 
@@ -465,7 +473,7 @@ $("hintBtn").onclick = () => {
   const best = st.p.steps[st.step].best;
   st.hint++;
   st.hintSq = st.hint === 1 ? [best.slice(0,2)] : [best.slice(0,2), best.slice(2,4)];
-  msg(st.hint === 1 ? "파란 칸의 기물을 움직여 보세요." : "여기서 여기로!");
+  msg(st.hint === 1 ? t("pz.hint1") : t("pz.hint2"));
   draw();
 };
 $("showBtn").onclick = () => {
@@ -485,14 +493,14 @@ $("playedBtn").onclick = () => {
   const p = st.p;
   st.game = new Chess(p.fen); st.step = 0; st.sel = null; st.hintSq = []; st.done = true; st.busy = true;
   play(p.played_uci); st.badge = {sq: p.played_uci.slice(2,4), kind: "bad"}; draw();
-  setTop("bad", `실제로 둔 수: ${p.played}`, "↻ 다시를 누르면 처음부터 풀 수 있어요");
+  setTop("bad", t("pz.playedTop", {m: p.played}), t("pz.playedSub"));
   setTimeout(() => {
     if (p.refline[0]){
       const m = st.game.move(p.refline[0]);
       if (m){ st.last = m.from + m.to; st.badge = null; }
     }
     st.busy = false; draw(); showExplain();
-    msg(`상대가 <span class="mv">${p.refline[0] || ""}</span>로 받아쳤어요.`);
+    msg(t("pz.playedMsg", {r: `<span class="mv">${p.refline[0] || ""}</span>`}));
   }, 900);
 };
 $("retryBtn").onclick = () => load();

@@ -13,11 +13,11 @@ export class Engine {
       this._onReady = resolve;
       this._readyFail = reject;
       setTimeout(() => {
-        if (this._onReady) this._fail(new Error("30초 시간 초과"));
+        if (this._onReady) this._fail(new Error("timeout 30s"));
       }, 30000);
     });
     this.worker.onmessage = (e) => this._line(typeof e.data === "string" ? e.data : String(e.data));
-    this.worker.onerror = (e) => this._fail(new Error("엔진 오류: " + (e.message || "unknown")));
+    this.worker.onerror = (e) => this._fail(new Error("engine error: " + (e.message || "unknown")));
     this.worker.postMessage("uci");
     this.worker.postMessage("setoption name Hash value 32");
     this.worker.postMessage("isready");
@@ -75,7 +75,7 @@ export class Engine {
     // watchdog: ask for a move after 20s, give up after 40s
     job.timer = setTimeout(() => {
       this.worker.postMessage("stop");
-      job.timer = setTimeout(() => this._fail(new Error("엔진 응답 없음")), 20000);
+      job.timer = setTimeout(() => this._fail(new Error("no response")), 20000);
     }, 20000);
   }
 
