@@ -54,6 +54,8 @@ vendor/             chess.js, Stockfish WASM
 
 ## 라이선스
 
+Copyright (C) 2026 Katherine Nahm
+
 이 프로젝트는 **GPL-3.0-or-later**야 (`LICENSE`). Stockfish가 GPLv3라서 같이 따라가. 상업적으로 써도 되지만, 배포할 때는 소스 코드도 같은 조건으로 공개해야 해.
 
 포함된 서드파티:

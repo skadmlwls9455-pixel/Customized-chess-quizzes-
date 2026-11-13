@@ -1,3 +1,5 @@
+// 체스 오답노트 — Copyright (C) 2026 Katherine Nahm
+// SPDX-License-Identifier: GPL-3.0-or-later
 // 체스 오답노트 — main UI
 import { Chess } from "../vendor/chess.js";
 import { PIECE } from "./pieces.js";

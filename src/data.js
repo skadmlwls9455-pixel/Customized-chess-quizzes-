@@ -1,3 +1,5 @@
+// 체스 오답노트 — Copyright (C) 2026 Katherine Nahm
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Loading games: Chess.com public API (directly, or through the /api/chesscom proxy when
 // the browser blocks a direct request), or a PGN file the user uploads.
 import { Chess } from "../vendor/chess.js";

@@ -1,3 +1,5 @@
+// 체스 오답노트 — Copyright (C) 2026 Katherine Nahm
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Vercel serverless proxy for the Chess.com public API.
 // Only used when the browser cannot reach api.chess.com directly. Restricted to read-only
 // player game endpoints so it cannot be used as an open proxy.

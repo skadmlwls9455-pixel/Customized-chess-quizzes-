@@ -1,3 +1,5 @@
+// 체스 오답노트 — Copyright (C) 2026 Katherine Nahm
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Stockfish (WASM, lite single-threaded) wrapper.
 // Every call returns the final "info" line for each multipv slot, scored from the side to move.
 

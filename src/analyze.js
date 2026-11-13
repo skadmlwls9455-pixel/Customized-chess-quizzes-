@@ -1,3 +1,5 @@
+// 체스 오답노트 — Copyright (C) 2026 Katherine Nahm
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Finds the move that decided each lost game and turns the position before it into a puzzle.
 import { Chess } from "../vendor/chess.js";
 import { scoreOf } from "./engine.js";
