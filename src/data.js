@@ -30,8 +30,8 @@ async function getJSON(path) {
     const r = await fetch("/api/chesscom?path=" + encodeURIComponent(path));
     const isJson = (r.headers.get("content-type") || "").includes("json");
     if (r.status === 404 && isJson) throw Object.assign(new Error("not found"), { notFound: true });
-    if (!isJson) throw new Error("Chess.com에 연결하지 못했습니다. 잠시 후 다시 시도하거나 PGN 파일을 사용하세요.");
-    if (!r.ok) throw new Error("Chess.com에서 기록을 가져오지 못했습니다 (HTTP " + r.status + ")");
+    if (!isJson) throw new Error("Chess.com에 연결하지 못했어요. 잠시 후 다시 시도하거나 PGN 파일을 사용해 주세요.");
+    if (!r.ok) throw new Error("Chess.com에서 기록을 가져오지 못했어요 (HTTP " + r.status + ")");
     return await r.json();
   }
 }
@@ -39,15 +39,15 @@ async function getJSON(path) {
 // Returns games newest first: {white, black, result, pgn, ts, link, timeClass}
 export async function fetchChessCom(username, { timeClasses, wantLosses, onProgress }) {
   const user = normalizeUser(username);
-  if (!user) throw new Error("아이디 형식이 올바르지 않습니다.");
+  if (!user) throw new Error("아이디 형식이 올바르지 않아요.");
   let archives;
   try {
     archives = (await getJSON(`/pub/player/${encodeURIComponent(user)}/games/archives`)).archives || [];
   } catch (e) {
-    if (e.notFound) throw new Error(`Chess.com에서 "${username}" 아이디를 찾지 못했습니다.`);
+    if (e.notFound) throw new Error(`Chess.com에서 "${username}" 아이디를 찾지 못했어요.`);
     throw e;
   }
-  if (!archives.length) throw new Error("이 아이디로 둔 게임이 없습니다.");
+  if (!archives.length) throw new Error("이 아이디로 둔 게임이 없어요.");
   const games = [];
   let losses = 0;
   for (let i = archives.length - 1; i >= 0 && losses < wantLosses && i >= archives.length - 24; i--) {
