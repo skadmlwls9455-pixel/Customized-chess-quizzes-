@@ -43,11 +43,13 @@ function validPuzzle(p){
   if (![p.refline, p.san_line].every(a => Array.isArray(a) && a.every(isSan))) return false;
   if (!Array.isArray(p.theme) || !p.theme.every(isStr) || !Array.isArray(p.steps) || !p.steps.length) return false;
   if (!p.steps.every(s => isObj(s) && Array.isArray(s.accept) && s.accept.length && s.accept.every(isUci) && isUci(s.best) && (s.reply == null || isUci(s.reply)))) return false;
+  if (p.ok === 1) return true; // replayed once already (the replay is the slow part with hundreds of puzzles)
   try {
     new Chess(p.fen).move(uciObj(p.played_uci));
     const c = new Chess(p.fen);
     for (const s of p.steps){ c.move(uciObj(s.best)); if (s.reply) c.move(uciObj(s.reply)); }
   } catch(_) { return false; }
+  p.ok = 1;
   return true;
 }
 // miss: the puzzle was once failed, hinted or revealed, so it can no longer be a first-try solve
@@ -58,14 +60,17 @@ function cleanProgress(pr){
 }
 // Tags that can be recomputed from what a puzzle stores, so puzzles saved by older versions get them right.
 function retag(p){
+  if (p.tg === 2) return; // tagged by this version already
   const th = p.theme.filter(x => !["기물 흘림", "메이트 있음", "오프닝", "포지션"].includes(x));
   if (Math.abs(p.eval_played) < 90000 && hungPiece(p.fen, p.played_uci, p.refline)) th.unshift("기물 흘림");
   if (p.eval_best >= 90000 || p.san_line.some((s, i) => i % 2 === 0 && s.endsWith("#"))) th.push("메이트 있음");
   if (p.moveno <= 10) th.push("오프닝");
   if (!th.length) th.push("포지션");
   p.theme = th;
+  p.tg = 2;
 }
-function readCache(u){
+// skip: ids of puzzles the caller is about to overwrite, so validating and retagging them is wasted work
+function readCache(u, skip){
   let c;
   try { c = JSON.parse(localStorage.getItem(key(u)) || "null"); } catch(_) { return null; }
   if (!isObj(c) || !Array.isArray(c.puzzles) || !Array.isArray(c.games)) return null;
@@ -74,40 +79,59 @@ function readCache(u){
   const an = {};
   if (Array.isArray(c.analyzed)) c.analyzed.forEach(k => { if (isStr(k)) an[k] = [0, 0]; });
   else if (isObj(c.analyzed)) for (const [k, v] of Object.entries(c.analyzed)) if (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite)) an[k] = v;
-  const kept = c.puzzles.filter(validPuzzle);
+  const trusted = p => !!skip && isObj(p) && skip.has(p.id);
+  let fresh = false; // some puzzle was checked or retagged for the first time: worth saving the marks
+  const kept = c.puzzles.filter(p => {
+    if (trusted(p)) return true;
+    const known = isObj(p) && p.ok === 1 && p.tg === 2;
+    const v = validPuzzle(p);
+    if (v && !known) fresh = true;
+    return v;
+  }), keptSet = new Set(kept);
   // the game of a dropped puzzle gets analysed again
-  for (const p of c.puzzles) if (!kept.includes(p) && isObj(p) && isStr(p.id)){ delete an[p.id]; if (/^\d+-\d+$/.test(p.id)) delete an[p.id.split("-")[0]]; }
-  kept.forEach(retag);
+  for (const p of c.puzzles) if (!keptSet.has(p) && isObj(p) && isStr(p.id)){ delete an[p.id]; if (/^\d+-\d+$/.test(p.id)) delete an[p.id.split("-")[0]]; }
+  kept.forEach(p => { if (!trusted(p)) retag(p); });
   c.puzzles = kept;
   c.analyzed = an;
   c.games = c.games.filter(g => isObj(g) && Number.isFinite(g.ts) && ["W","D","L"].includes(g.res));
   c.progress = cleanProgress(c.progress);
+  Object.defineProperty(c, "fresh", { value: fresh }); // not saved
   return c;
 }
 // Another tab may have saved since this one loaded, so merge instead of overwriting: puzzles, analysed
-// games and progress only grow, except what this session replaced on purpose.
-const removedIds = new Set(), resetIds = new Set();
+// games and progress only grow, except what this tab replaced on purpose since its last save.
+const removedIds = new Set(), resets = new Map(); // resets: puzzle id -> progress maps to drop for it
+const rank = v => Array.isArray(v) ? v[0] * 1000 + v[1] : -1; // [generator, depth]: newer analysis ranks higher
 function mergeCache(old, cur){
   if (!old) return cur;
+  const analyzed = Object.assign({}, old.analyzed);
+  for (const [k, v] of Object.entries(cur.analyzed)) if (rank(v) >= rank(analyzed[k])) analyzed[k] = v;
   const byId = new Map(old.puzzles.filter(p => !removedIds.has(p.id)).map(p => [p.id, p]));
-  cur.puzzles.forEach(p => byId.set(p.id, p));
+  for (const p of cur.puzzles){
+    // a tab opened before another tab re-analysed this game must not put the old puzzle back
+    if (byId.has(p.id) && rank(old.analyzed[p.id]) > rank(cur.analyzed[p.id])) continue;
+    byId.set(p.id, p);
+  }
   const progress = {};
   for (const k of ["done", "clean", "habit", "miss"]){
     const o = Object.assign({}, old.progress[k]);
-    resetIds.forEach(id => delete o[id]);
+    resets.forEach((maps, id) => { if (maps.has(k)) delete o[id]; });
     progress[k] = Object.assign(o, cur.progress[k]);
   }
   const newer = (old.at || 0) > (cur.at || 0) ? old : cur;
   return { ...cur, puzzles: [...byId.values()].sort((a, b) => b.date.localeCompare(a.date)),
-    analyzed: Object.assign({}, old.analyzed, cur.analyzed), progress, games: newer.games, at: newer.at };
+    analyzed, progress, games: newer.games, at: newer.at };
 }
 let saveWarned = false;
 function writeCache(){
   if (!CACHE) return;
   CACHE.progress = store;
-  const merged = mergeCache(readCache(USER), CACHE);
+  const merged = mergeCache(readCache(USER, new Set(CACHE.puzzles.map(p => p.id))), CACHE);
   Object.assign(store, merged.progress);
-  try { localStorage.setItem(key(USER), JSON.stringify(merged)); }
+  try {
+    localStorage.setItem(key(USER), JSON.stringify(merged));
+    removedIds.clear(); resets.clear(); // applied once; later saves must not undo other tabs' work
+  }
   catch (e){
     console.warn("ccq: could not save", e);
     if (!saveWarned){ saveWarned = true; alert(t("err.save")); }
@@ -142,13 +166,18 @@ document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
 });
 $("logoIc").style.backgroundImage = `url("${PIECE.wn}")`;
 
+// The start screen only counts puzzles; the full (validating) read happens when one is opened.
+function peekCount(u){
+  try { const c = JSON.parse(localStorage.getItem(key(u)) || "null"); return isObj(c) && Array.isArray(c.puzzles) && Array.isArray(c.games) ? c.puzzles.length : -1; }
+  catch(_) { return -1; }
+}
 function renderSaved(){
   const el = $("saved"); el.innerHTML = "";
   savedUsers().forEach(u => {
-    const c = readCache(u); if (!c) return;
+    const n = peekCount(u); if (n < 0) return;
     const b = document.createElement("button");
-    b.textContent = t("saved", {u, n: c.puzzles.length});
-    b.onclick = () => openCache(u, readCache(u) || c); // another tab may have saved since
+    b.textContent = t("saved", {u, n});
+    b.onclick = () => { const c = readCache(u); if (!c){ renderSaved(); return; } openCache(u, c); if (c.fresh) save(); };
     el.appendChild(b);
   });
 }
@@ -245,17 +274,24 @@ async function runInner(user, getGames){
       }
       if (cancelled && !p) break; // unfinished: leave the game for the next run
       // replace what an older run stored for this game, even when this run finds no puzzle
-      const mine = x => x.id === k || (!!g.link && x.id === g.link) || (g.ts > 0 && x.id === `${g.ts}-${x.ply}`);
+      const mine = x => x.id === k || (!!g.link && x.id === g.link) || (!!g.legacy && x.id === g.legacy) || (g.ts > 0 && x.id === `${g.ts}-${x.ply}`);
       const old = puzzles.filter(mine);
       puzzles = puzzles.filter(x => !mine(x));
-      if (p) puzzles.push(p);
+      if (p){ p.ok = 1; p.tg = 2; puzzles.push(p); } // built from legal moves, tagged by this version
       for (const o of old){
         if (!p || o.id !== p.id) removedIds.add(o.id);
-        // progress belongs to the puzzle as it was: keep it only if the puzzle did not change
-        if (!(p && p.id === o.id && p.fen === o.fen && JSON.stringify(p.steps) === JSON.stringify(o.steps))){
-          resetIds.add(o.id);
-          for (const m of ["done", "clean", "habit", "miss"]) delete store[m][o.id];
+        // Progress is about the position and its answer, not the list of alternatives: the habit stays
+        // while the position and the move played are the same, the rest while the first answer is too.
+        const samePos = !!p && p.fen === o.fen && p.played_uci === o.played_uci;
+        const keep = !samePos ? [] : sameMove(p.steps[0].best, o.steps[0].best) ? ["done", "clean", "habit", "miss"] : ["habit"];
+        const drop = new Set();
+        for (const m of ["done", "clean", "habit", "miss"]){
+          const v = store[m][o.id];
+          if (p && o.id === p.id && keep.includes(m)) continue;
+          delete store[m][o.id]; drop.add(m);
+          if (v && keep.includes(m)) store[m][p.id] = v; // same game under a new id
         }
+        if (drop.size) resets.set(o.id, drop);
       }
       an[k] = [GEN, d2];
     } catch (e){
@@ -423,7 +459,10 @@ function load(){
     msg(""); renderSide(); return;
   }
   const idx = view[pos], p = PUZ[idx];
-  const game = new Chess(p.fen);
+  let game;
+  // a stored puzzle that no longer loads (hand-edited storage) is dropped instead of breaking the page
+  try { game = new Chess(p.fen); }
+  catch(_) { PUZ.splice(idx, 1); removedIds.add(p.id); rebuildView(); return load(); }
   st = {p, idx, game, step:0, sel:null, hint:0, last:p.lastmove, done:false, busy:false, wrongs:0, usedAnswer:false, badge:null, hintSq:[]};
   const meW = p.me === "w";
   $("oppName").textContent = p.opp;
@@ -497,7 +536,7 @@ function bindBoard(){
     e.preventDefault();
     clearGhosts();
     const pc = st.game.get(sq);
-    drag = {st, from: sq, own: !!(pc && pc.color === st.p.me), sx: e.clientX, sy: e.clientY, moved: false, ghost: null, over: null, id: e.pointerId};
+    drag = {st, type: e.pointerType, from: sq, own: !!(pc && pc.color === st.p.me), sx: e.clientX, sy: e.clientY, moved: false, ghost: null, over: null, id: e.pointerId};
     try { bd.setPointerCapture(e.pointerId); } catch(_) {}
   });
   bd.addEventListener("pointermove", e => {
@@ -535,7 +574,8 @@ function bindBoard(){
   bd.addEventListener("pointerup", e => end(e, false));
   bd.addEventListener("pointercancel", e => end(e, true));
   bd.addEventListener("lostpointercapture", e => { if (drag && e.pointerId === drag.id) end(e, true); });
-  bd.addEventListener("contextmenu", e => { if (drag){ e.preventDefault(); cancelDrag(); } });
+  // a right-click mid-drag cancels it; on touch screens contextmenu is just a long press, so it does not
+  bd.addEventListener("contextmenu", e => { if (drag && drag.type === "mouse"){ e.preventDefault(); cancelDrag(); } });
 }
 // King dropped or clicked onto its own castling rook (Lichess's default, Chess.com accepts it too):
 // the king's two-square destination that chess.js and Stockfish use, or null.

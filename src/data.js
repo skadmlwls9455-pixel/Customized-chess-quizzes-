@@ -286,7 +286,7 @@ export function parsePgnFile(text, username, want = Infinity) {
     const base = parseInt(tc, 10);
     const timeClass = tc.includes("/") || tc === "-" ? "daily" : base < 180 ? "bullet" : base < 600 ? "blitz" : "rapid";
     games.push({
-      white: h.White, black: h.Black, me, res, ts, h, movetext,
+      white: h.White, black: h.Black, me, res, ts, h, movetext, chunk,
       day: dm && !tm ? `${dm[1]}.${dm[2]}.${dm[3]}` : "", // no clock time: show the header's date as is
       timeClass,
       myElo: +(me === "w" ? h.WhiteElo : h.BlackElo) || null,
@@ -305,7 +305,9 @@ export function parsePgnFile(text, username, want = Infinity) {
       losses++;
     }
     Object.assign(g, gameRef(g.h, g.movetext));
-    delete g.h; delete g.movetext;
+    // the id earlier builds of this branch gave games without a [Link], so their puzzles are recognised
+    g.legacy = isHttp(g.h.Link) ? "" : "pgn:" + hash(g.chunk.trim());
+    delete g.h; delete g.movetext; delete g.chunk;
     out.push(g);
   }
   out.unreadable = unreadable;
