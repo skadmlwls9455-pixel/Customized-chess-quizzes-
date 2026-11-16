@@ -130,7 +130,7 @@ export async function buildPuzzle(engine, game, d, depth) {
   if (new Chess(d.fen).inCheck()) theme.push("체크 대응");
   if (!theme.length) theme.push("포지션");
   return {
-    id: game.link || `${game.ts}-${d.ply}`,
+    id: game.key || game.link || `${game.ts}-${d.ply}`,
     link: game.link,
     date: new Date(game.ts).toISOString().slice(0, 10).replace(/-/g, "."),
     opp: me === "w" ? game.black : game.white,

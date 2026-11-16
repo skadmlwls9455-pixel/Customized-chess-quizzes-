@@ -89,6 +89,13 @@ export async function fetchChessCom(username, { timeClasses, wantLosses, onProgr
   return games;
 }
 
+// Short stable hash (FNV-1a) so PGN games without a Link header still get distinct ids.
+function hash(str) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) h = Math.imul(h ^ str.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36);
+}
+
 export function parsePgnFile(text, username) {
   const user = normalizeUser(username) || String(username).trim().toLowerCase();
   const chunks = text.replace(/\r/g, "").split(/\n\n(?=\[Event )/);
@@ -116,6 +123,7 @@ export function parsePgnFile(text, username) {
     games.push({
       white: h.White, black: h.Black, me, res, pgn: chunk, ts,
       link: h.Link || "", timeClass,
+      key: h.Link || "pgn:" + hash(chunk.trim()),
       myElo: +(me === "w" ? h.WhiteElo : h.BlackElo) || null,
       oppElo: +(me === "w" ? h.BlackElo : h.WhiteElo) || null,
       event: h.Event || "",

@@ -75,6 +75,7 @@ function openCache(u, c){
 
 /* ---------- analysis pipeline ---------- */
 let cancelled = false, engine = null, running = false;
+const gameKey = g => g.key || g.link || String(g.ts);
 $("cancelBtn").onclick = () => { cancelled = true; $("progSub").textContent = t("prog.wrap"); };
 
 async function run(user, getGames){
@@ -96,7 +97,13 @@ async function runInner(user, getGames){
   const prev = readCache(user);
   const done = new Set(prev ? prev.analyzed || [] : []);
   const puzzles = prev ? prev.puzzles.slice() : [];
-  const todo = losses.filter(g => !done.has(g.link || String(g.ts)));
+  // legacy caches keyed PGN games without a link by their timestamp
+  const seen = new Set();
+  const todo = losses.filter(g => {
+    const k = gameKey(g);
+    if (seen.has(k) || done.has(k) || (!g.link && g.ts && done.has(String(g.ts)))) return false;
+    seen.add(k); return true;
+  });
   const [d1, d2] = QUALITY[$("quality").value] || QUALITY.normal;
   const g0 = games[0];
   const display = g0 ? (g0.me === "w" ? g0.white : g0.black) || user : user;
@@ -122,7 +129,7 @@ async function runInner(user, getGames){
         const p = await buildPuzzle(engine, g, d, d2);
         if (p.steps.length) puzzles.push(p);
       }
-      CACHE.analyzed.push(g.link || String(g.ts));
+      CACHE.analyzed.push(gameKey(g));
     } catch (e){
       console.warn("skip game", g.link, e);
       if (engine && engine.dead){ $("err").textContent = t("err.engineDied"); break; }
@@ -248,6 +255,7 @@ function load(){
   if (!view.length){ $("board").innerHTML = ""; setTop("ok", t("pz.allDone"), t("pz.allDoneSub")); msg(""); renderSide(); return; }
   const idx = view[pos], p = PUZ[idx];
   const game = new Chess(p.fen);
+  $("promo").classList.remove("show");
   st = {p, idx, game, step:0, sel:null, hint:0, last:p.lastmove, done:false, busy:false, wrongs:0, usedAnswer:false, badge:null, hintSq:[]};
   const meW = p.me === "w";
   $("oppName").textContent = p.opp;
@@ -370,6 +378,7 @@ function tryMove(from, to){
 
 function askPromo(from, to){
   const pr = $("promo"); pr.innerHTML = "";
+  const cur = st;
   const flip = st.p.me === "b";
   const fi = FILES.indexOf(to[0]);
   const col = document.createElement("div"); col.className = "col";
@@ -377,7 +386,7 @@ function askPromo(from, to){
   ["q","n","r","b"].forEach(k => {
     const c = document.createElement("div");
     c.style.backgroundImage = `url("${PIECE[st.p.me + k]}")`;
-    c.onclick = e => { e.stopPropagation(); pr.classList.remove("show"); attempt(from + to + k); };
+    c.onclick = e => { e.stopPropagation(); pr.classList.remove("show"); if (st === cur) attempt(from + to + k); };
     col.appendChild(c);
   });
   pr.appendChild(col);
@@ -392,7 +401,7 @@ function play(uci){
 }
 
 function attempt(uci){
-  const p = st.p, step = p.steps[st.step];
+  const p = st.p, step = p.steps[st.step], cur = st;
   const ok = step.accept.some(a => a === uci || (a.slice(0,4) === uci.slice(0,4) && (a.length === 4 || !uci[4] || a[4] === uci[4])));
   const isPlayed = st.step === 0 && uci.slice(0,4) === p.played_uci.slice(0,4);
   if (!ok){
@@ -408,6 +417,7 @@ function attempt(uci){
       msg(t("pz.wrongMsg"));
     }
     setTimeout(() => {
+      if (st !== cur) return;
       st.game.undo(); st.last = st.step === 0 ? p.lastmove : p.steps[st.step-1].reply; st.badge = null; st.busy = false;
       setTop(p.me, turnTxt(p.me), t("pz.again")); draw(); renderSide();
     }, 900);
@@ -424,6 +434,7 @@ function attempt(uci){
   msg(t("pz.replying"));
   st.busy = true;
   setTimeout(() => {
+    if (st !== cur) return;
     play(step.reply); st.badge = null; st.busy = false;
     setTop(p.me, turnTxt(p.me), t("pz.next"));
     msg(t("pz.continue")); draw();
@@ -479,22 +490,25 @@ $("hintBtn").onclick = () => {
 $("showBtn").onclick = () => {
   if (st.done || st.busy) return;
   st.usedAnswer = true; st.busy = true; st.hintSq = [];
+  const cur = st;
   const go = () => {
+    if (st !== cur) return;
     const s = st.p.steps[st.step];
     play(s.best); st.badge = {sq: s.best.slice(2,4), kind: "best"}; st.step++; draw();
     if (st.step < st.p.steps.length && s.reply){
-      setTimeout(() => { play(s.reply); st.badge = null; draw(); setTimeout(go, 650); }, 650);
+      setTimeout(() => { if (st !== cur) return; play(s.reply); st.badge = null; draw(); setTimeout(go, 650); }, 650);
     } else { st.busy = false; finish(false); }
   };
   go();
 };
 $("playedBtn").onclick = () => {
   if (st.busy) return;
-  const p = st.p;
+  const p = st.p, cur = st;
   st.game = new Chess(p.fen); st.step = 0; st.sel = null; st.hintSq = []; st.done = true; st.busy = true;
   play(p.played_uci); st.badge = {sq: p.played_uci.slice(2,4), kind: "bad"}; draw();
   setTop("bad", t("pz.playedTop", {m: p.played}), t("pz.playedSub"));
   setTimeout(() => {
+    if (st !== cur) return;
     if (p.refline[0]){
       const m = st.game.move(p.refline[0]);
       if (m){ st.last = m.from + m.to; st.badge = null; }
