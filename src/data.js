@@ -64,6 +64,7 @@ async function request(url, ms, signal) {
 
 async function getJSONOnce(path, signal) {
   let status = 0; // what Chess.com answered on the direct request; 0 = no readable answer
+  let timedOut = false;
   if (!directDown) {
     try {
       const r = await request("https://api.chess.com" + path, DIRECT_WAIT, signal);
@@ -73,6 +74,7 @@ async function getJSONOnce(path, signal) {
     } catch (e) {
       if (e.notFound || e.cancelled) throw e;
       if (e.name !== "AbortError") directDown = true; // blocked, not slow
+      else timedOut = true;
     }
   }
   // Fall back to our own proxy (works when deployed on Vercel).
@@ -83,7 +85,10 @@ async function getJSONOnce(path, signal) {
     if (e.cancelled) throw e;
     throw status ? httpError(status) : new Error(t("err.offline"));
   }
-  if (r.ok && r.body) return r.body;
+  if (r.ok && r.body) {
+    if (timedOut) directDown = true; // the proxy answers while the direct route hangs: stop waiting on it
+    return r.body;
+  }
   if (r.status === 404 && missingUser(r.body)) throw notFound();
   // not JSON: no proxy here (for example a local static server)
   if (!r.isJson) throw status ? httpError(status) : new Error(t("err.offline"));
@@ -105,6 +110,7 @@ async function getJSON(path, signal) {
 export async function fetchChessCom(username, { timeClasses, wantLosses, onProgress, signal }) {
   const user = normalizeUser(username);
   if (!user) throw new Error(t("err.badId"));
+  directDown = false; // try the direct route again on each run: an earlier failure may have been passing
   let archives;
   try {
     archives = (await getJSON(`/pub/player/${encodeURIComponent(user)}/games/archives`, signal)).archives || [];
@@ -305,8 +311,8 @@ export function parsePgnFile(text, username, want = Infinity) {
       losses++;
     }
     Object.assign(g, gameRef(g.h, g.movetext));
-    // the id earlier builds of this branch gave games without a [Link], so their puzzles are recognised
-    g.legacy = isHttp(g.h.Link) ? "" : "pgn:" + hash(g.chunk.trim());
+    // the id earlier builds of this branch gave every PGN game, so their puzzles are recognised
+    g.legacy = g.h.Link || "pgn:" + hash(g.chunk.trim());
     delete g.h; delete g.movetext; delete g.chunk;
     out.push(g);
   }

@@ -97,20 +97,27 @@ function san(fen, uci) {
 
 // Root moves of `fen` with scores from `me`'s side, best first. MultiPV 4, paged with searchmoves while
 // the last line of a page is still acceptable, so equally good 5th, 6th... moves are not graded wrong.
-async function rootLines(engine, fen, depth, me, exclude) {
+// The first page decides the best moves. Later pages only decide what else is acceptable, so they are
+// searched 3 plies shallower and are not mixed into the first page's order. `out.more`: pages remain.
+// fastestMate: after the first move of a mate only the fastest mates count, so no paging for slower ones.
+async function rootLines(engine, fen, depth, me, exclude, { out = [], pages = 6, fastestMate = false } = {}) {
   const sign = fen.split(" ")[1] === me ? 1 : -1;
   const legal = new Chess(fen).moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion || ""));
   const pool = exclude ? legal.filter((u) => !sameMove(u, exclude)) : legal;
-  const out = [];
+  out.more = false;
   while (out.length < pool.length) {
+    if (pages-- <= 0) { out.more = true; break; }
     const rest = pool.filter((u) => !out.some((l) => l.move === u));
-    const { infos } = await engine.analyse(fen, depth, 4, rest.length < legal.length ? rest : null);
-    const page = infos.filter((i) => i.pv.length && rest.includes(i.pv[0]));
+    const d = out.length ? Math.max(8, depth - 3) : depth;
+    const { infos } = await engine.analyse(fen, d, 4, rest.length < legal.length ? rest : null);
+    const page = infos.filter((i) => i.pv.length && rest.includes(i.pv[0]))
+      .map((i) => ({ move: i.pv[0], s: sign * scoreOf(i) }))
+      .sort((a, b) => b.s - a.s);
     if (!page.length) break;
-    for (const i of page) out.push({ move: i.pv[0], s: sign * scoreOf(i) });
-    out.sort((a, b) => b.s - a.s);
-    const worst = Math.min(...page.map((i) => sign * scoreOf(i)));
-    if (page.length < 4 || !acceptable(worst, out[0].s)) break;
+    out.push(...page);
+    const best = out[0].s, worst = page[page.length - 1].s;
+    const more = fastestMate && best >= 90000 ? worst >= best : acceptable(worst, best);
+    if (page.length < 4 || !more) break;
   }
   return out;
 }
@@ -135,14 +142,15 @@ export function hungPiece(fen, playedUci, refline) {
     const c = new Chess(fen);
     const played = c.move(mv(playedUci));
     const me = played.color;
+    const bal = () => c.board().flat().reduce((s, q) => s + (q ? (q.color === me ? 1 : -1) * VAL[q.type] : 0), 0);
+    const start = bal(); // before the refutation
     const take = c.move(refline[0]);
     if (!take.captured || take.captured === "p") return false;
     if (played.captured && played.to === take.to && VAL[played.captured] >= VAL[take.captured]) return false;
-    if (VAL[take.piece] >= VAL[take.captured] && c.moves({ verbose: true }).some((x) => x.to === take.to)) return false;
-    const bal = () => c.board().flat().reduce((s, q) => s + (q ? (q.color === me ? 1 : -1) * VAL[q.type] : 0), 0);
-    const won = bal();
+    // only the capture is known: an even trade I can answer is not a hung piece
+    if (refline.length < 2 && VAL[take.piece] >= VAL[take.captured] && c.moves({ verbose: true }).some((x) => x.to === take.to)) return false;
     for (const s of refline.slice(1)) c.move(s);
-    return bal() <= won;
+    return start - bal() >= 2; // still down a piece for a pawn (or worse) once the line is played out
   } catch (_) {
     return false;
   }
@@ -165,8 +173,15 @@ export async function buildPuzzle(engine, game, d, depth) {
   let mating = false; // I have a forced mate: play it out (up to 6 moves) instead of stopping at 3
   for (let step = 0; step < (mating ? 6 : 3); step++) {
     // the move actually played is never a candidate: the puzzle asks for something better
-    let lines = await rootLines(engine, fen, depth, me, step === 0 ? d.playedUci : null);
+    let lines = await rootLines(engine, fen, depth, me, step === 0 ? d.playedUci : null, { pages: step === 0 ? 6 : 1, fastestMate: step > 0 });
     if (!lines.length) break;
+    if (step > 0) {
+      // decide from the first page whether this step is kept at all before paging any further
+      const b0 = san(fen, lines[0].move), s1 = lines.length > 1 ? lines[1].s : -999999;
+      const kept = lines[0].s >= 90000 || lines[0].s - s1 >= 150 || new Chess(fen).inCheck() || b0.capture || b0.check;
+      if (!kept) break;
+      if (lines.more) lines = await rootLines(engine, fen, depth, me, null, { out: lines, pages: 5, fastestMate: true });
+    }
     if (step === 0) {
       // MultiPV root scores can miss a refutation that a search of the position after the move finds;
       // the played move is measured that way below, so measure its alternatives the same way.
