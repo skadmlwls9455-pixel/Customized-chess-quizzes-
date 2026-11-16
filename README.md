@@ -8,7 +8,7 @@ Enter your Chess.com username. The app analyzes your recent **losses** with Stoc
 
 ## Features
 
-- **One puzzle per lost game, at the turning point**: the position right before your first move that dropped the evaluation by 2+ pawns. Some puzzles continue for 2–3 moves.
+- **One puzzle per lost game, at the turning point**: the position right before your first move that dropped the evaluation by 2+ pawns and gave away the advantage. Some puzzles continue for 2–3 moves.
 - **Habit detection**: replay the move you actually lost with and it says *"That's the move you played"* and files the puzzle under **Habits**.
 - **Filters**: hung piece · opening · missed capture · thrown win · mate · unsolved · habits
 - **Tilt report**: loss rate after two losses in a row, early collapses, hung pieces, with tailored advice
@@ -53,7 +53,7 @@ Chess.com 아이디만 넣으면 최근에 **진 판**을 엔진으로 분석해
 
 ## 기능
 
-- **진 판마다 결정적인 한 수만 퍼즐로**: 엔진 평가가 처음으로 폰 2개 이상 떨어진 내 수 직전 장면에서 시작해. 상대 응수가 이어지는 2~3수짜리 퍼즐도 있어.
+- **진 판마다 결정적인 한 수만 퍼즐로**: 엔진 평가가 처음으로 폰 2개 이상 떨어지면서 우세를 잃은 내 수 직전 장면에서 시작해. 상대 응수가 이어지는 2~3수짜리 퍼즐도 있어.
 - **손버릇 감지**: 그때 졌던 수를 또 두면 "그 수야, 그때 둔 수"라고 알려 주고 따로 모아 둬.
 - **분류**: 기물 흘림 · 오프닝 · 잡을 수 있었음 · 이기던 판 놓침 · 메이트 있음 · 안 푼 것 · 손버릇
 - **리포트**: 연패 뒤 패배율(틸트), 초반 붕괴 비율, 기물 흘림 횟수와 맞춤 조언
