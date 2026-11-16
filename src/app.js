@@ -5,11 +5,12 @@ import { Chess } from "../vendor/chess.js";
 import { PIECE } from "./pieces.js";
 import { Engine } from "./engine.js";
 import { fetchChessCom, parsePgnFile, normalizeUser } from "./data.js";
-import { findDecisiveMove, buildPuzzle, buildReport } from "./analyze.js";
+import { findDecisiveMove, buildPuzzle, buildReport, hungPiece, GEN } from "./analyze.js";
 import { t, LANG, setLang, applyStatic } from "./i18n.js";
 
 applyStatic();
-document.querySelectorAll(".langs button").forEach(b => { b.classList.toggle("on", b.dataset.lang === LANG); b.onclick = () => setLang(b.dataset.lang); });
+// switching reloads the page, so never while an analysis is running (the switcher is hidden then too)
+document.querySelectorAll(".langs button").forEach(b => { b.classList.toggle("on", b.dataset.lang === LANG); b.onclick = () => { if (b.dataset.lang !== LANG && !running) setLang(b.dataset.lang); }; });
 
 const FILES = "abcdefgh";
 const FILTERS = ["전체","안 푼 것","손버릇","기물 흘림","오프닝","잡을 수 있었음","이기던 판 놓침","메이트 있음"];
@@ -18,23 +19,134 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 let USER = "", PUZ = [], REPORT = null, CACHE = null;
-let store = {done:{}, clean:{}, habit:{}};
+let store = {done:{}, clean:{}, habit:{}, miss:{}};
 let filter = "전체", view = [], pos = 0, st = null;
 
 /* ---------- storage ---------- */
 const key = u => "ccq:v1:" + u.toLowerCase();
-function readCache(u){ try { return JSON.parse(localStorage.getItem(key(u)) || "null"); } catch(_) { return null; } }
+const isObj = x => !!x && typeof x === "object" && !Array.isArray(x);
+const isStr = x => typeof x === "string";
+const isUci = x => isStr(x) && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(x);
+const isSan = x => isStr(x) && /^[a-hKQRBNO1-8x=+#-]{2,10}$/.test(x);
+const sameMove = (a, b) => a.slice(0,4) === b.slice(0,4) && (a[4] || "") === (b[4] || "");
+const uciObj = u => ({from: u.slice(0,2), to: u.slice(2,4), promotion: u[4] || "q"});
+// Only http(s) links: a PGN [Link] header or an old cache could hold a javascript: or data: URL.
+function safeLink(u){
+  try { const x = new URL(String(u)); return x.protocol === "https:" || x.protocol === "http:" ? x.href : ""; }
+  catch(_) { return ""; }
+}
+// localStorage may hold an older, partial or hand-edited cache: keep only puzzles that load and play.
+function validPuzzle(p){
+  if (!isObj(p) || !isStr(p.id) || !isStr(p.fen) || (p.me !== "w" && p.me !== "b") || !isStr(p.date)) return false;
+  if (!isSan(p.played) || !isUci(p.played_uci) || !(p.lastmove == null || isStr(p.lastmove))) return false;
+  if (!Number.isFinite(p.eval_best) || !Number.isFinite(p.eval_played)) return false;
+  if (![p.refline, p.san_line].every(a => Array.isArray(a) && a.every(isSan))) return false;
+  if (!Array.isArray(p.theme) || !p.theme.every(isStr) || !Array.isArray(p.steps) || !p.steps.length) return false;
+  if (!p.steps.every(s => isObj(s) && Array.isArray(s.accept) && s.accept.length && s.accept.every(isUci) && isUci(s.best) && (s.reply == null || isUci(s.reply)))) return false;
+  if (p.ok === 1) return true; // replayed once already (the replay is the slow part with hundreds of puzzles)
+  try {
+    new Chess(p.fen).move(uciObj(p.played_uci));
+    const c = new Chess(p.fen);
+    for (const s of p.steps){ c.move(uciObj(s.best)); if (s.reply) c.move(uciObj(s.reply)); }
+  } catch(_) { return false; }
+  p.ok = 1;
+  return true;
+}
+// miss: the puzzle was once failed, hinted or revealed, so it can no longer be a first-try solve
+function cleanProgress(pr){
+  const out = {done:{}, clean:{}, habit:{}, miss:{}};
+  if (isObj(pr)) for (const k of Object.keys(out)) if (isObj(pr[k])) out[k] = pr[k];
+  return out;
+}
+// Tags that can be recomputed from what a puzzle stores, so puzzles saved by older versions get them right.
+function retag(p){
+  if (p.tg === 2) return; // tagged by this version already
+  const th = p.theme.filter(x => !["기물 흘림", "메이트 있음", "오프닝", "포지션"].includes(x));
+  if (Math.abs(p.eval_played) < 90000 && hungPiece(p.fen, p.played_uci, p.refline)) th.unshift("기물 흘림");
+  if (p.eval_best >= 90000 || p.san_line.some((s, i) => i % 2 === 0 && s.endsWith("#"))) th.push("메이트 있음");
+  if (p.moveno <= 10) th.push("오프닝");
+  if (!th.length) th.push("포지션");
+  p.theme = th;
+  p.tg = 2;
+}
+// skip: ids of puzzles the caller is about to overwrite, so validating and retagging them is wasted work
+function readCache(u, skip){
+  let c;
+  try { c = JSON.parse(localStorage.getItem(key(u)) || "null"); } catch(_) { return null; }
+  if (!isObj(c) || !Array.isArray(c.puzzles) || !Array.isArray(c.games)) return null;
+  c.user = isStr(c.user) && c.user ? c.user : u;
+  // analyzed: {gameKey: [generator, depth]}; caches from before generators existed list keys only
+  const an = {};
+  if (Array.isArray(c.analyzed)) c.analyzed.forEach(k => { if (isStr(k)) an[k] = [0, 0]; });
+  else if (isObj(c.analyzed)) for (const [k, v] of Object.entries(c.analyzed)) if (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite)) an[k] = v;
+  const trusted = p => !!skip && isObj(p) && skip.has(p.id);
+  let fresh = false; // some puzzle was checked or retagged for the first time: worth saving the marks
+  const kept = c.puzzles.filter(p => {
+    if (trusted(p)) return true;
+    const known = isObj(p) && p.ok === 1 && p.tg === 2;
+    const v = validPuzzle(p);
+    if (v && !known) fresh = true;
+    return v;
+  }), keptSet = new Set(kept);
+  // the game of a dropped puzzle gets analysed again
+  for (const p of c.puzzles) if (!keptSet.has(p) && isObj(p) && isStr(p.id)){ delete an[p.id]; if (/^\d+-\d+$/.test(p.id)) delete an[p.id.split("-")[0]]; }
+  kept.forEach(p => { if (!trusted(p)) retag(p); });
+  c.puzzles = kept;
+  c.analyzed = an;
+  c.games = c.games.filter(g => isObj(g) && Number.isFinite(g.ts) && ["W","D","L"].includes(g.res));
+  c.progress = cleanProgress(c.progress);
+  Object.defineProperty(c, "fresh", { value: fresh }); // not saved
+  return c;
+}
+// Another tab may have saved since this one loaded, so merge instead of overwriting: puzzles, analysed
+// games and progress only grow, except what this tab replaced on purpose since its last save.
+const removedIds = new Set(), resets = new Map(); // resets: puzzle id -> progress maps to drop for it
+const rank = v => Array.isArray(v) ? v[0] * 1000 + v[1] : -1; // [generator, depth]: newer analysis ranks higher
+function mergeCache(old, cur){
+  if (!old) return cur;
+  const analyzed = Object.assign({}, old.analyzed);
+  for (const [k, v] of Object.entries(cur.analyzed)) if (rank(v) >= rank(analyzed[k])) analyzed[k] = v;
+  const byId = new Map(old.puzzles.filter(p => !removedIds.has(p.id)).map(p => [p.id, p]));
+  for (const p of cur.puzzles){
+    // a tab opened before another tab re-analysed this game must not put the old puzzle back
+    if (byId.has(p.id) && rank(old.analyzed[p.id]) > rank(cur.analyzed[p.id])) continue;
+    byId.set(p.id, p);
+  }
+  const progress = {};
+  for (const k of ["done", "clean", "habit", "miss"]){
+    const o = Object.assign({}, old.progress[k]);
+    resets.forEach((maps, id) => { if (maps.has(k)) delete o[id]; });
+    progress[k] = Object.assign(o, cur.progress[k]);
+  }
+  const newer = (old.at || 0) > (cur.at || 0) ? old : cur;
+  return { ...cur, puzzles: [...byId.values()].sort((a, b) => b.date.localeCompare(a.date)),
+    analyzed, progress, games: newer.games, at: newer.at };
+}
+let saveWarned = false;
 function writeCache(){
   if (!CACHE) return;
   CACHE.progress = store;
-  try { localStorage.setItem(key(USER), JSON.stringify(CACHE)); } catch(_) {}
+  const merged = mergeCache(readCache(USER, new Set(CACHE.puzzles.map(p => p.id))), CACHE);
+  Object.assign(store, merged.progress);
   try {
-    const list = JSON.parse(localStorage.getItem("ccq:users") || "[]").filter(x => x.toLowerCase() !== USER.toLowerCase());
+    localStorage.setItem(key(USER), JSON.stringify(merged));
+    removedIds.clear(); resets.clear(); // applied once; later saves must not undo other tabs' work
+  }
+  catch (e){
+    console.warn("ccq: could not save", e);
+    if (!saveWarned){ saveWarned = true; alert(t("err.save")); }
+  }
+  try {
+    const list = savedUsers().filter(x => x.toLowerCase() !== USER.toLowerCase());
     list.unshift(USER); localStorage.setItem("ccq:users", JSON.stringify(list.slice(0, 6)));
   } catch(_) {}
 }
 const save = () => writeCache();
-function savedUsers(){ try { return JSON.parse(localStorage.getItem("ccq:users") || "[]"); } catch(_) { return []; } }
+const markMiss = id => { if (!store.miss[id]){ store.miss[id] = 1; save(); } };
+function savedUsers(){
+  try { const a = JSON.parse(localStorage.getItem("ccq:users") || "[]"); return Array.isArray(a) ? a.filter(x => isStr(x) && x) : []; }
+  catch(_) { return []; }
+}
 
 /* ---------- screens ---------- */
 function show(name){
@@ -43,6 +155,7 @@ function show(name){
   $("tabs").classList.toggle("hidden", !(name === "puzzle" || name === "report"));
   document.body.classList.toggle("inapp", name === "puzzle" || name === "report");
   document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  const langs = document.querySelector(".foot .langs"); if (langs) langs.classList.toggle("hidden", name === "progress");
   window.scrollTo(0, 0);
 }
 document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
@@ -53,56 +166,88 @@ document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => {
 });
 $("logoIc").style.backgroundImage = `url("${PIECE.wn}")`;
 
+// The start screen only counts puzzles; the full (validating) read happens when one is opened.
+function peekCount(u){
+  try { const c = JSON.parse(localStorage.getItem(key(u)) || "null"); return isObj(c) && Array.isArray(c.puzzles) && Array.isArray(c.games) ? c.puzzles.length : -1; }
+  catch(_) { return -1; }
+}
 function renderSaved(){
   const el = $("saved"); el.innerHTML = "";
   savedUsers().forEach(u => {
-    const c = readCache(u); if (!c) return;
+    const n = peekCount(u); if (n < 0) return;
     const b = document.createElement("button");
-    b.textContent = t("saved", {u, n: c.puzzles.length});
-    b.onclick = () => openCache(u, c);
+    b.textContent = t("saved", {u, n});
+    b.onclick = () => { const c = readCache(u); if (!c){ renderSaved(); return; } openCache(u, c); if (c.fresh) save(); };
     el.appendChild(b);
   });
 }
 
 function openCache(u, c){
   USER = c.user || u; CACHE = c; PUZ = c.puzzles;
-  store = Object.assign({done:{}, clean:{}, habit:{}}, c.progress || {});
+  store = cleanProgress(c.progress);
   filter = "전체"; pos = 0;
-  REPORT = buildReport(c.games, PUZ);
+  // the report covers the games of the last run; puzzles from older runs stay in the puzzle list
+  const inWin = new Set(c.games.map(g => g.k).filter(isStr));
+  REPORT = buildReport(c.games, inWin.size ? PUZ.filter(p => inWin.has(p.id)) : PUZ);
+  // rebuild the puzzle screen even with no puzzles, so it never keeps a previous user's board
+  rebuildView(); load();
   if (!PUZ.length){ renderReport(); show("report"); return; }
-  rebuildView(); load(); show("puzzle");
+  show("puzzle");
 }
 
 /* ---------- analysis pipeline ---------- */
-let cancelled = false, engine = null, running = false;
-$("cancelBtn").onclick = () => { cancelled = true; $("progSub").textContent = t("prog.wrap"); };
+let cancelled = false, engine = null, running = false, aborter = null;
+const gameKey = g => g.key || g.link || String(g.ts);
+$("cancelBtn").onclick = () => {
+  cancelled = true; $("progSub").textContent = t("prog.wrap");
+  if (aborter) aborter.abort();
+  if (engine && !engine.dead) engine.cancel();
+};
 
 async function run(user, getGames){
   if (running) return;
   running = true;
   try { await runInner(user, getGames); }
-  finally { running = false; }
+  catch (e){
+    console.error("analysis failed", e);
+    show("home"); $("err").textContent = t("err.unexpected") + " (" + (e && e.message || e) + ")";
+  }
+  finally {
+    running = false; aborter = null;
+    // solving needs no engine: release the worker and its memory until the next run
+    if (engine){ engine.stop(); engine = null; }
+  }
 }
 async function runInner(user, getGames){
   $("err").textContent = "";
   cancelled = false;
+  aborter = new AbortController();
   show("progress");
   $("progTitle").textContent = t("prog.loading"); $("progBar").style.width = "0%"; $("progSub").textContent = "";
   let games;
-  try { games = await getGames(msg => $("progSub").textContent = msg); }
-  catch (e){ show("home"); $("err").textContent = e.message || String(e); return; }
+  try { games = await getGames(m => { if (!cancelled) $("progSub").textContent = m; }, aborter.signal); }
+  catch (e){ show("home"); if (!cancelled) $("err").textContent = e.message || String(e); return; }
+  if (cancelled){ show("home"); return; }
   const losses = games.filter(g => g.res === "L");
   if (!losses.length){ show("home"); $("err").textContent = t("err.noLoss"); return; }
   const prev = readCache(user);
-  const done = new Set(prev ? prev.analyzed || [] : []);
-  const puzzles = prev ? prev.puzzles.slice() : [];
-  const todo = losses.filter(g => !done.has(g.link || String(g.ts)));
   const [d1, d2] = QUALITY[$("quality").value] || QUALITY.normal;
+  // analyzed: {gameKey: [generator, depth]}. A game is analysed again by a newer generator or at a
+  // deeper quality, never at a shallower one.
+  const an = prev ? { ...prev.analyzed } : {};
+  const current = k => !!an[k] && an[k][0] === GEN && an[k][1] >= d2;
+  let puzzles = prev ? prev.puzzles.slice() : [];
+  const seen = new Set();
+  const todo = losses.filter(g => {
+    const k = gameKey(g);
+    if (seen.has(k) || current(k)) return false;
+    seen.add(k); return true;
+  });
   const g0 = games[0];
   const display = g0 ? (g0.me === "w" ? g0.white : g0.black) || user : user;
   USER = display;
-  CACHE = { user: display, puzzles, analyzed: [...done], games: games.map(g => ({ts: g.ts, res: g.res})), progress: prev ? prev.progress : null, at: Date.now() };
-  store = Object.assign({done:{}, clean:{}, habit:{}}, CACHE.progress || {});
+  store = cleanProgress(prev && prev.progress);
+  CACHE = { user: display, puzzles, analyzed: an, games: games.map(g => ({k: gameKey(g), ts: g.ts, res: g.res})), progress: store, at: Date.now() };
   $("progTitle").textContent = todo.length ? t("prog.analyzing", {n: todo.length}) : t("prog.cached");
   if (todo.length){
     $("progSub").textContent = t("prog.engine");
@@ -110,28 +255,70 @@ async function runInner(user, getGames){
     catch (e){ engine = null; show("home"); $("err").textContent = t("err.engine") + " (" + e.message + ")"; return; }
   }
   const t0 = Date.now();
+  let died = false;
   for (let i = 0; i < todo.length && !cancelled; i++){
     const g = todo[i];
     const left = i ? Math.round((Date.now() - t0) / i * (todo.length - i) / 1000) : null;
     $("progSub").textContent = `${i+1}/${todo.length} · vs ${g.me === "w" ? g.black : g.white}` + (left !== null ? t("prog.left", {t: left >= 60 ? t("unit.min", {n: Math.round(left/60)}) : t("unit.sec", {n: left})}) : "");
     $("progBar").style.width = (100 * i / todo.length) + "%";
+    const k = gameKey(g);
     try {
-      const d = await findDecisiveMove(engine, g, d1, () => cancelled);
-      if (cancelled) break;
-      if (d){
-        const p = await buildPuzzle(engine, g, d, d2);
-        if (p.steps.length) puzzles.push(p);
+      await engine.newGame();
+      let from = 0, p = null;
+      for (;;){
+        const d = await findDecisiveMove(engine, g, d1, () => cancelled, from);
+        if (!d || cancelled) break;
+        const cand = await buildPuzzle(engine, g, d, d2);
+        if (cand.steps.length){ p = cand; break; }
+        from = d.next; // the deeper search did not confirm this move: look for the next candidate
       }
-      CACHE.analyzed.push(g.link || String(g.ts));
+      if (cancelled && !p) break; // unfinished: leave the game for the next run
+      // replace what an older run stored for this game, even when this run finds no puzzle
+      const mine = x => x.id === k || (!!g.link && x.id === g.link) || (!!g.legacy && x.id === g.legacy) || (g.ts > 0 && x.id === `${g.ts}-${x.ply}`);
+      const old = puzzles.filter(mine);
+      puzzles = puzzles.filter(x => !mine(x));
+      if (p){ p.ok = 1; p.tg = 2; puzzles.push(p); } // built from legal moves, tagged by this version
+      for (const o of old){
+        if (!p || o.id !== p.id) removedIds.add(o.id);
+        // Progress is about the position and its answer, not the list of alternatives: the habit stays
+        // while the position and the move played are the same, the rest while the first answer is too.
+        const samePos = !!p && p.fen === o.fen && p.played_uci === o.played_uci;
+        const keep = !samePos ? [] : sameMove(p.steps[0].best, o.steps[0].best) ? ["done", "clean", "habit", "miss"] : ["habit"];
+        const drop = new Set();
+        for (const m of ["done", "clean", "habit", "miss"]){
+          const v = store[m][o.id];
+          if (p && o.id === p.id && keep.includes(m)) continue;
+          delete store[m][o.id]; drop.add(m);
+          if (v && keep.includes(m)) store[m][p.id] = v; // same game under a new id
+        }
+        if (drop.size) resets.set(o.id, drop);
+      }
+      an[k] = [GEN, d2];
     } catch (e){
+      if (cancelled || (e && e.cancelled)) break;
       console.warn("skip game", g.link, e);
-      if (engine && engine.dead){ $("err").textContent = t("err.engineDied"); break; }
+      if (e && e.badPosition){
+        // Stockfish refused this game's start position: skip the game and go on with a new engine
+        an[k] = [GEN, d2];
+        try { engine = new Engine(); await engine.ready; }
+        catch (_){ engine = null; died = true; break; }
+      } else if (engine && engine.dead){ died = true; break; }
     }
     puzzles.sort((a, b) => b.date.localeCompare(a.date));
     CACHE.puzzles = puzzles; writeCache();
   }
   $("progBar").style.width = "100%";
+  CACHE.puzzles = puzzles;
+  writeCache(); // also stores this run's game window when nothing new was analysed
   openCache(user, CACHE);
+  if (died) notice(t("err.engineDied"));
+}
+
+// A one-off warning on whichever screen openCache() landed on.
+function notice(text){
+  const html = `<span style="color:#ffb3a9">${esc(text)}</span>`;
+  if (!$("puzzleView").classList.contains("hidden")) $("msg").innerHTML = html;
+  else $("reportView").insertAdjacentHTML("afterbegin", `<div class="err" style="margin:0 0 12px">${esc(text)}</div>`);
 }
 
 $("form").addEventListener("submit", e => {
@@ -143,7 +330,7 @@ $("form").addEventListener("submit", e => {
   const tcs = [...document.querySelectorAll(".tc:checked")].map(x => x.value);
   if (!tcs.length){ $("err").textContent = t("err.noTc"); return; }
   const want = +$("nLoss").value;
-  run(user, onProgress => fetchChessCom(user, { timeClasses: tcs, wantLosses: want, onProgress }).then(gs => {
+  run(user, (onProgress, signal) => fetchChessCom(user, { timeClasses: tcs, wantLosses: want, onProgress, signal }).then(gs => {
     // keep games up to the oldest of the wanted losses
     let n = 0, cut = gs.length;
     for (let i = 0; i < gs.length; i++){ if (gs[i].res === "L" && ++n === want){ cut = i + 1; break; } }
@@ -155,17 +342,34 @@ $("pgnFile").addEventListener("change", async e => {
   const raw = $("user").value.trim();
   const user = normalizeUser(raw) || raw.toLowerCase();
   if (!raw){ $("err").textContent = t("err.pgnId"); e.target.value = ""; return; }
-  const text = await f.text();
+  let text;
+  try { text = await readPgnText(f, user); }
+  catch (_){ $("err").textContent = t("err.pgnRead"); e.target.value = ""; return; }
+  e.target.value = "";
   const want = +$("nLoss").value;
   run(user, async () => {
-    const gs = parsePgnFile(text, user);
+    // let the progress screen paint before the (synchronous) parse of a big file
+    await new Promise(r => { requestAnimationFrame(() => setTimeout(r, 0)); setTimeout(r, 100); });
+    const gs = parsePgnFile(text, user, want);
+    if (gs.unreadable && !gs.some(g => g.res === "L")) throw new Error(t("err.pgnUnreadable", {n: gs.unreadable}));
     if (!gs.length) throw new Error(t("err.pgnNone"));
-    let n = 0, cut = gs.length;
-    for (let i = 0; i < gs.length; i++){ if (gs[i].res === "L" && ++n === want){ cut = i + 1; break; } }
-    return gs.slice(0, cut);
+    return gs;
   });
-  e.target.value = "";
 });
+
+// PGN files are not always UTF-8: the PGN standard says ISO 8859-1, and desktop databases still write
+// Windows-1252 or a local code page such as CP949. Pick the first decoding in which the name shows up.
+async function readPgnText(file, user){
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder("utf-16le").decode(bytes);
+  if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder("utf-16be").decode(bytes);
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch(_) {}
+  const names = s => [...s.matchAll(/\[\s*(?:White|Black)\s+"([^"]*)"/g)].map(m => m[1].trim().toLowerCase());
+  for (const enc of ["windows-1252", "euc-kr", "windows-1251", "windows-1250", "shift_jis", "gbk", "utf-8"]){
+    try { const s = new TextDecoder(enc).decode(bytes); if (names(s).includes(user)) return s; } catch(_) {}
+  }
+  return new TextDecoder("windows-1252").decode(bytes);
+}
 
 /* ---------- report ---------- */
 function pct(a, b){ return b ? Math.round(100 * a / b) + "%" : "-"; }
@@ -245,9 +449,20 @@ const msg = h => { $("msg").innerHTML = h; };
 const turnTxt = c => c === "w" ? t("pz.turnW") : t("pz.turnB");
 
 function load(){
-  if (!view.length){ $("board").innerHTML = ""; setTop("ok", t("pz.allDone"), t("pz.allDoneSub")); msg(""); renderSide(); return; }
+  closePromo();
+  drag = null; clearGhosts(); // a gesture never outlives its puzzle
+  if (!view.length){
+    st = null;
+    $("board").innerHTML = ""; $("explain").classList.remove("show"); $("count").textContent = "0 / 0";
+    if (PUZ.length) setTop("ok", t("pz.allDone"), t("pz.allDoneSub"));
+    else setTop("ok", t("pz.none"), t("pz.noneSub"));
+    msg(""); renderSide(); return;
+  }
   const idx = view[pos], p = PUZ[idx];
-  const game = new Chess(p.fen);
+  let game;
+  // a stored puzzle that no longer loads (hand-edited storage) is dropped instead of breaking the page
+  try { game = new Chess(p.fen); }
+  catch(_) { PUZ.splice(idx, 1); removedIds.add(p.id); rebuildView(); return load(); }
   st = {p, idx, game, step:0, sel:null, hint:0, last:p.lastmove, done:false, busy:false, wrongs:0, usedAnswer:false, badge:null, hintSq:[]};
   const meW = p.me === "w";
   $("oppName").textContent = p.opp;
@@ -256,7 +471,8 @@ function load(){
   $("meAv").style.backgroundImage = `url("${PIECE[p.me + "k"]}")`;
   setTop(p.me, turnTxt(p.me), p.steps.length > 1 ? t("pz.findN", {n: p.steps.length}) : t("pz.find"));
   $("meta").textContent = t("pz.meta", {d: p.date.replaceAll(".","/"), n: p.moveno});
-  $("glink").href = p.link || "#"; $("glink").style.visibility = p.link ? "visible" : "hidden";
+  const link = safeLink(p.link);
+  $("glink").href = link || "#"; $("glink").style.visibility = link ? "visible" : "hidden";
   $("tags").innerHTML = (store.habit[p.id] ? `<span class="tag warn">${t("f.손버릇")}</span>` : "") + p.theme.map(x=>`<span class="tag">${t("f." + x)}</span>`).join("");
   msg(t("pz.howto"));
   $("explain").classList.remove("show");
@@ -270,6 +486,7 @@ function sqName(r, f){ const flip = st.p.me === "b"; return (flip ? FILES[7-f] :
 function sqEl(sq){ return document.querySelector(`.sq[data-sq="${sq}"]`); }
 
 function draw(){
+  if (!st) return;
   const el = $("board"); el.innerHTML = "";
   const flip = st.p.me === "b";
   const legal = st.sel ? st.game.moves({square: st.sel, verbose: true}) : [];
@@ -278,7 +495,7 @@ function draw(){
     const sq = sqName(r, f);
     const fi = FILES.indexOf(sq[0]), rk = +sq[1];
     const d = document.createElement("div");
-    d.className = "sq " + ((fi + rk) % 2 === 1 ? "l" : "d");
+    d.className = "sq " + ((fi + rk) % 2 === 0 ? "l" : "d");
     d.dataset.sq = sq;
     if ((st.last && (st.last.slice(0,2) === sq || st.last.slice(2,4) === sq)) || st.sel === sq) d.classList.add("hl");
     if (st.hintSq.includes(sq)) d.classList.add("hint");
@@ -309,18 +526,23 @@ function clearGhosts(){ document.querySelectorAll(".pc.drag").forEach(g => g.rem
 function bindBoard(){
   if (boardBound) return; boardBound = true;
   const bd = $("board");
+  const cancelDrag = () => { drag = null; clearGhosts(); if (st){ st.sel = null; draw(); } };
   bd.addEventListener("pointerdown", e => {
+    // another finger joined (pinch, resting thumb): abort the gesture, never start one
+    if (e.isPrimary === false){ e.preventDefault(); if (drag) cancelDrag(); return; }
     if (!st || st.done || st.busy) return;
     if (e.button !== undefined && e.button > 0) return;
     const sq = sqAt(e.clientX, e.clientY); if (!sq) return;
     e.preventDefault();
     clearGhosts();
     const pc = st.game.get(sq);
-    drag = {from: sq, own: !!(pc && pc.color === st.p.me), sx: e.clientX, sy: e.clientY, moved: false, ghost: null, over: null, id: e.pointerId};
+    drag = {st, type: e.pointerType, from: sq, own: !!(pc && pc.color === st.p.me), sx: e.clientX, sy: e.clientY, moved: false, ghost: null, over: null, id: e.pointerId};
     try { bd.setPointerCapture(e.pointerId); } catch(_) {}
   });
   bd.addEventListener("pointermove", e => {
     if (!drag || e.pointerId !== drag.id) return;
+    // right or middle button pressed mid-drag, or the release was lost: cancel the drag
+    if (e.pointerType === "mouse" && e.buttons !== 1){ try { bd.releasePointerCapture(e.pointerId); } catch(_) {} cancelDrag(); return; }
     if (!drag.moved){
       if (!drag.own || Math.abs(e.clientX - drag.sx) + Math.abs(e.clientY - drag.sy) < 6) return;
       drag.moved = true;
@@ -342,7 +564,8 @@ function bindBoard(){
     const d = drag; drag = null;
     clearGhosts();
     try { bd.releasePointerCapture(e.pointerId); } catch(_) {}
-    if (cancel){ draw(); return; }
+    if (!st) return;
+    if (cancel || d.st !== st || st.done || st.busy){ draw(); return; }
     if (d.moved){
       const to = sqAt(e.clientX, e.clientY);
       if (to && to !== d.from) tryMove(d.from, to); else draw();
@@ -351,16 +574,28 @@ function bindBoard(){
   bd.addEventListener("pointerup", e => end(e, false));
   bd.addEventListener("pointercancel", e => end(e, true));
   bd.addEventListener("lostpointercapture", e => { if (drag && e.pointerId === drag.id) end(e, true); });
+  // a right-click mid-drag cancels it; on touch screens contextmenu is just a long press, so it does not
+  bd.addEventListener("contextmenu", e => { if (drag && drag.type === "mouse"){ e.preventDefault(); cancelDrag(); } });
+}
+// King dropped or clicked onto its own castling rook (Lichess's default, Chess.com accepts it too):
+// the king's two-square destination that chess.js and Stockfish use, or null.
+function castleTo(from, to){
+  const k = st.game.get(from), r = st.game.get(to);
+  if (!k || k.type !== "k" || !r || r.type !== "r" || r.color !== k.color || from[1] !== to[1]) return null;
+  const side = to[0] === "h" ? "k" : to[0] === "a" ? "q" : null;
+  const m = side && st.game.moves({square: from, verbose: true}).find(x => x.flags.includes(side));
+  return m ? m.to : null;
 }
 function clickSq(sq){
   if (st.done || st.busy) return;
   const pc = st.game.get(sq);
-  if (st.sel && st.sel !== sq && !(pc && pc.color === st.p.me)){ tryMove(st.sel, sq); return; }
+  if (st.sel && st.sel !== sq && (castleTo(st.sel, sq) || !(pc && pc.color === st.p.me))){ tryMove(st.sel, sq); return; }
   if (pc && pc.color === st.p.me){ st.sel = st.sel === sq ? null : sq; draw(); return; }
   st.sel = null; draw();
 }
 
 function tryMove(from, to){
+  to = castleTo(from, to) || to;
   const legal = st.game.moves({square: from, verbose: true}).filter(m => m.to === to);
   st.sel = null;
   if (!legal.length){ draw(); return; }
@@ -368,8 +603,14 @@ function tryMove(from, to){
   attempt(from + to);
 }
 
+function closePromo(){ const pr = $("promo"); pr.classList.remove("show"); pr.innerHTML = ""; }
 function askPromo(from, to){
   const pr = $("promo"); pr.innerHTML = "";
+  const cur = st, step0 = st.step, fen0 = st.game.fen();
+  // On touch screens the browser fires a click for the very tap that opened the picker, right where a
+  // piece now sits. React only to a press that started on the picker.
+  let armed = false;
+  pr.onpointerdown = () => { armed = true; };
   const flip = st.p.me === "b";
   const fi = FILES.indexOf(to[0]);
   const col = document.createElement("div"); col.className = "col";
@@ -377,11 +618,14 @@ function askPromo(from, to){
   ["q","n","r","b"].forEach(k => {
     const c = document.createElement("div");
     c.style.backgroundImage = `url("${PIECE[st.p.me + k]}")`;
-    c.onclick = e => { e.stopPropagation(); pr.classList.remove("show"); attempt(from + to + k); };
+    c.onclick = e => {
+      e.stopPropagation(); if (!armed) return; closePromo();
+      if (st === cur && !st.done && !st.busy && st.step === step0 && st.game.fen() === fen0) attempt(from + to + k);
+    };
     col.appendChild(c);
   });
   pr.appendChild(col);
-  pr.onclick = () => { pr.classList.remove("show"); draw(); };
+  pr.onclick = () => { if (!armed) return; closePromo(); draw(); };
   pr.classList.add("show");
 }
 
@@ -392,11 +636,13 @@ function play(uci){
 }
 
 function attempt(uci){
-  const p = st.p, step = p.steps[st.step];
-  const ok = step.accept.some(a => a === uci || (a.slice(0,4) === uci.slice(0,4) && (a.length === 4 || !uci[4] || a[4] === uci[4])));
-  const isPlayed = st.step === 0 && uci.slice(0,4) === p.played_uci.slice(0,4);
+  if (!st || st.done || st.busy){ draw(); return; }
+  const p = st.p, step = p.steps[st.step], cur = st;
+  const real = step.accept.find(a => sameMove(a, uci));
+  const ok = !!real;
+  const isPlayed = st.step === 0 && sameMove(p.played_uci, uci);
   if (!ok){
-    st.wrongs++;
+    st.wrongs++; markMiss(p.id);
     play(uci); st.badge = {sq: uci.slice(2,4), kind: "bad"}; st.hintSq = []; draw();
     st.busy = true;
     if (isPlayed && !st.usedAnswer){
@@ -408,22 +654,24 @@ function attempt(uci){
       msg(t("pz.wrongMsg"));
     }
     setTimeout(() => {
+      if (st !== cur) return;
       st.game.undo(); st.last = st.step === 0 ? p.lastmove : p.steps[st.step-1].reply; st.badge = null; st.busy = false;
       setTop(p.me, turnTxt(p.me), t("pz.again")); draw(); renderSide();
     }, 900);
     return;
   }
-  const real = step.accept.find(a => a.slice(0,4) === uci.slice(0,4)) || uci;
   play(real);
-  const isBest = real.slice(0,4) === step.best.slice(0,4);
+  const isBest = sameMove(real, step.best);
   st.badge = {sq: real.slice(2,4), kind: isBest ? "best" : "ok"}; st.hintSq = [];
   st.step++;
   draw();
-  if (st.step >= p.steps.length){ finish(true); return; }
+  // the stored reply and later steps follow the best move only: another good move ends the puzzle here
+  if (st.step >= p.steps.length || !isBest){ finish(true); return; }
   setTop("ok", isBest ? t("pz.best") : t("pz.good"), t("pz.goOn"));
   msg(t("pz.replying"));
   st.busy = true;
   setTimeout(() => {
+    if (st !== cur) return;
     play(step.reply); st.badge = null; st.busy = false;
     setTop(p.me, turnTxt(p.me), t("pz.next"));
     msg(t("pz.continue")); draw();
@@ -433,13 +681,14 @@ function attempt(uci){
 function finish(solved){
   st.done = true;
   const p = st.p;
+  const first = st.wrongs === 0 && st.hint === 0 && !store.miss[p.id];
   if (solved && !st.usedAnswer){
     store.done[p.id] = 1;
-    if (st.wrongs === 0 && st.hint === 0) store.clean[p.id] = 1;
+    if (first) store.clean[p.id] = 1;
     save();
   }
   if (solved && !st.usedAnswer){
-    setTop("ok", st.wrongs === 0 && st.hint === 0 ? t("pz.clean") : t("pz.solved"), t("pz.solvedSub"));
+    setTop("ok", first ? t("pz.clean") : t("pz.solved"), t("pz.solvedSub"));
     msg(store.habit[p.id] ? t("pz.beatHabit") : t("pz.nice"));
   } else {
     setTop("bad", t("pz.revealed"), t("pz.later"));
@@ -469,32 +718,41 @@ function showExplain(){
 }
 
 $("hintBtn").onclick = () => {
-  if (st.done || st.busy) return;
+  if (!st || st.done || st.busy) return;
   const best = st.p.steps[st.step].best;
-  st.hint++;
-  st.hintSq = st.hint === 1 ? [best.slice(0,2)] : [best.slice(0,2), best.slice(2,4)];
-  msg(st.hint === 1 ? t("pz.hint1") : t("pz.hint2"));
+  st.hint++; markMiss(st.p.id); // st.hint is the running total; the level starts over at each step
+  if (st.hintStep !== st.step){ st.hintStep = st.step; st.hintLvl = 0; }
+  st.hintLvl++;
+  st.hintSq = st.hintLvl === 1 ? [best.slice(0,2)] : [best.slice(0,2), best.slice(2,4)];
+  const promo = st.hintLvl > 1 && best[4] ? " " + t("pz.hintPromo", {p: t("pc." + best[4])}) : "";
+  msg(st.hintLvl === 1 ? t("pz.hint1") : t("pz.hint2") + promo);
   draw();
 };
 $("showBtn").onclick = () => {
-  if (st.done || st.busy) return;
+  if (!st || st.done || st.busy) return;
+  closePromo(); markMiss(st.p.id);
   st.usedAnswer = true; st.busy = true; st.hintSq = [];
+  const cur = st;
   const go = () => {
+    if (st !== cur) return;
     const s = st.p.steps[st.step];
     play(s.best); st.badge = {sq: s.best.slice(2,4), kind: "best"}; st.step++; draw();
     if (st.step < st.p.steps.length && s.reply){
-      setTimeout(() => { play(s.reply); st.badge = null; draw(); setTimeout(go, 650); }, 650);
+      setTimeout(() => { if (st !== cur) return; play(s.reply); st.badge = null; draw(); setTimeout(go, 650); }, 650);
     } else { st.busy = false; finish(false); }
   };
   go();
 };
 $("playedBtn").onclick = () => {
-  if (st.busy) return;
-  const p = st.p;
+  if (!st || st.busy) return;
+  const p = st.p, cur = st;
+  closePromo();
+  if (!st.done) markMiss(p.id); // its explanation shows the solution line
   st.game = new Chess(p.fen); st.step = 0; st.sel = null; st.hintSq = []; st.done = true; st.busy = true;
   play(p.played_uci); st.badge = {sq: p.played_uci.slice(2,4), kind: "bad"}; draw();
   setTop("bad", t("pz.playedTop", {m: p.played}), t("pz.playedSub"));
   setTimeout(() => {
+    if (st !== cur) return;
     if (p.refline[0]){
       const m = st.game.move(p.refline[0]);
       if (m){ st.last = m.from + m.to; st.badge = null; }

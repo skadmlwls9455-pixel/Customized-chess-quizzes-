@@ -4,48 +4,77 @@
 import { Chess } from "../vendor/chess.js";
 import { scoreOf } from "./engine.js";
 
+// Bump whenever findDecisiveMove/buildPuzzle (or the game fields they read) change what gets stored:
+// games analysed by an older generator are analysed again on the next run.
+export const GEN = 2;
+
 const CLAMP = 1000;
 const clamp = (v) => Math.max(-CLAMP, Math.min(CLAMP, v));
 const VAL = { p: 1, n: 3, b: 3, r: 5, q: 9, k: 0 };
+// Lichess's centipawn -> win-chance curve (0-100).
+const winPct = (cp) => 50 + 50 * (2 / (1 + Math.exp(-0.00368208 * clamp(cp))) - 1);
+const sameMove = (a, b) => a.slice(0, 4) === b.slice(0, 4) && (a[4] || "") === (b[4] || "");
+// Close enough to the best move to accept: within 60 cp or 4 points of win chance (so +7 is fine when
+// +9 was best), any mate when a mate is on, and only the engine's defence when I am being mated.
+const near = (s, best) => (Math.abs(best) >= 3000 ? s >= best - 2000 : s >= best - 60 || winPct(best) - winPct(s) < 4);
+const acceptable = (s, best) => near(s, best) && (Math.abs(best) < 3000 || s > -150);
 
 // Eval of a position from `me`'s point of view, clamped.
 async function evalFor(engine, chess, me, depth) {
   if (chess.isCheckmate()) return chess.turn() === me ? -CLAMP : CLAMP;
-  if (chess.isDraw() || chess.isStalemate()) return 0;
+  // only draws that end the game by themselves: threefold and the 50-move rule have to be claimed,
+  // and a lost game that went on past one was not drawn
+  if (chess.isStalemate() || chess.isInsufficientMaterial()) return 0;
   const { infos } = await engine.analyse(chess.fen(), depth, 1);
   const s = scoreOf(infos[0]);
   return clamp(chess.turn() === me ? s : -s);
 }
 
-// Walks a lost game until the first move of mine that drops >= 2 pawns from a not-yet-lost position.
-export async function findDecisiveMove(engine, game, depth, isCancelled) {
+// Stockfish 19 quits on some positions chess.js accepts (more than 8 pawns or too many promoted
+// pieces, the side not to move in check). Only a [FEN] start can be like that: legal moves never are.
+export function engineUnsupported(fen) {
+  const c = new Chess(fen);
+  for (const color of ["w", "b"]) {
+    const n = { p: 0, n: 0, b: 0, r: 0, q: 0, k: 0 };
+    for (const row of c.board()) for (const sq of row) if (sq && sq.color === color) n[sq.type]++;
+    const promoted = Math.max(0, n.q - 1) + Math.max(0, n.r - 2) + Math.max(0, n.b - 2) + Math.max(0, n.n - 2);
+    if (n.p > 8 || n.p + promoted > 8) return true;
+  }
+  const them = c.turn() === "w" ? "b" : "w";
+  const king = c.findPiece({ type: "k", color: them })[0];
+  return !king || c.isAttacked(king, c.turn());
+}
+
+// Walks a lost game until the first move of mine (at or after move index `from`) that drops >= 2 pawns
+// from a not-yet-lost position and gives the advantage away (a slip from +9 to +7 is not decisive).
+export async function findDecisiveMove(engine, game, depth, isCancelled, from = 0) {
   const c = new Chess();
   c.loadPgn(game.pgn);
   const moves = c.history({ verbose: true });
+  if (moves.length && engineUnsupported(moves[0].before)) return null;
   const me = game.me;
   const board = new Chess(moves.length ? moves[0].before : undefined);
-  let prevEval = null;
   for (let i = 0; i < moves.length; i++) {
     if (isCancelled()) return null;
     const mv = moves[i];
-    if (mv.color !== me) {
+    if (mv.color !== me || i < from) {
       board.move(mv.san);
-      prevEval = null;
       continue;
     }
-    const before = prevEval !== null ? prevEval : await evalFor(engine, board, me, depth);
+    const before = await evalFor(engine, board, me, depth);
     const fenBefore = board.fen();
     board.move(mv.san);
     const after = await evalFor(engine, board, me, depth);
-    prevEval = null;
-    if (before - after >= 200 && before > -300) {
+    if (before - after >= 200 && before > -300 && after < 100) {
+      const moveno = +fenBefore.split(" ")[5];
       return {
-        ply: i + 1,
+        next: i + 1, // where to resume if this candidate does not make a puzzle
+        ply: (moveno - 1) * 2 + (me === "w" ? 1 : 2), // absolute ply, also right for [FEN] starts
         fen: fenBefore,
         played: mv.san,
         playedUci: mv.from + mv.to + (mv.promotion || ""),
         lastmove: i > 0 ? moves[i - 1].from + moves[i - 1].to : null,
-        moveno: +fenBefore.split(" ")[5],
+        moveno,
         before,
         after,
       };
@@ -66,6 +95,74 @@ function san(fen, uci) {
   return { san: m.san, fen: c.fen(), capture: !!m.captured, check: c.inCheck(), mate: c.isCheckmate(), c };
 }
 
+// Root moves of `fen` with scores from `me`'s side, best first. MultiPV 4, paged with searchmoves while
+// the last line of a page is still acceptable, so equally good 5th, 6th... moves are not graded wrong.
+// The first page decides the best moves. Later pages only decide what else is acceptable, so they are
+// searched 3 plies shallower and are not mixed into the first page's order. `out.more`: pages remain.
+// fastestMate: after the first move of a mate only the fastest mates count, so no paging for slower ones.
+async function rootLines(engine, fen, depth, me, exclude, { out = [], pages = 6, fastestMate = false } = {}) {
+  const sign = fen.split(" ")[1] === me ? 1 : -1;
+  const legal = new Chess(fen).moves({ verbose: true }).map((m) => m.from + m.to + (m.promotion || ""));
+  const pool = exclude ? legal.filter((u) => !sameMove(u, exclude)) : legal;
+  out.more = false;
+  while (out.length < pool.length) {
+    if (pages-- <= 0) { out.more = true; break; }
+    const rest = pool.filter((u) => !out.some((l) => l.move === u));
+    const d = out.length ? Math.max(8, depth - 3) : depth;
+    const { infos } = await engine.analyse(fen, d, 4, rest.length < legal.length ? rest : null);
+    const page = infos.filter((i) => i.pv.length && rest.includes(i.pv[0]))
+      .map((i) => ({ move: i.pv[0], s: sign * scoreOf(i) }))
+      .sort((a, b) => b.s - a.s);
+    if (!page.length) break;
+    out.push(...page);
+    const best = out[0].s, worst = page[page.length - 1].s;
+    const more = fastestMate && best >= 90000 ? worst >= best : acceptable(worst, best);
+    if (page.length < 4 || !more) break;
+  }
+  return out;
+}
+
+// Score of playing `uci` in `fen`, from `me`'s side, measured by searching the position after it.
+async function childScore(engine, fen, uci, depth, me) {
+  const c = new Chess(fen);
+  c.move(mv(uci));
+  if (c.isCheckmate()) return c.turn() === me ? -100000 : 100000;
+  if (c.isStalemate() || c.isInsufficientMaterial()) return 0;
+  const { infos } = await engine.analyse(c.fen(), depth, 1);
+  if (!infos[0]) return 0;
+  const s = scoreOf(infos[0]);
+  return c.turn() === me ? s : -s;
+}
+
+// The refutation wins a non-pawn piece outright (not a recapture of my own capture, not an even trade)
+// and the material is not won back within the next two plies.
+export function hungPiece(fen, playedUci, refline) {
+  if (!refline || !refline[0]) return false;
+  try {
+    const c = new Chess(fen);
+    const played = c.move(mv(playedUci));
+    const me = played.color;
+    const bal = () => c.board().flat().reduce((s, q) => s + (q ? (q.color === me ? 1 : -1) * VAL[q.type] : 0), 0);
+    const start = bal(); // before the refutation
+    const take = c.move(refline[0]);
+    if (!take.captured || take.captured === "p") return false;
+    if (played.captured && played.to === take.to && VAL[played.captured] >= VAL[take.captured]) return false;
+    // only the capture is known: an even trade I can answer is not a hung piece
+    if (refline.length < 2 && VAL[take.piece] >= VAL[take.captured] && c.moves({ verbose: true }).some((x) => x.to === take.to)) return false;
+    for (const s of refline.slice(1)) c.move(s);
+    return start - bal() >= 2; // still down a piece for a pawn (or worse) once the line is played out
+  } catch (_) {
+    return false;
+  }
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+// Calendar day in the viewer's time zone, kept sortable as YYYY.MM.DD.
+function localDay(ms) {
+  const d = new Date(ms);
+  return `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
+}
+
 export async function buildPuzzle(engine, game, d, depth) {
   const me = game.me;
   const pov = (fen, s) => (fen.split(" ")[1] === me ? s : -s);
@@ -73,20 +170,36 @@ export async function buildPuzzle(engine, game, d, depth) {
   const sanLine = [];
   let fen = d.fen;
   let evalBest = null;
-  for (let step = 0; step < 3; step++) {
-    const { infos } = await engine.analyse(fen, depth, 4);
-    if (!infos.length || !infos[0].pv.length) break;
-    const scores = infos.map((i) => pov(fen, scoreOf(i)));
-    const best = scores[0];
+  let mating = false; // I have a forced mate: play it out (up to 6 moves) instead of stopping at 3
+  for (let step = 0; step < (mating ? 6 : 3); step++) {
+    // the move actually played is never a candidate: the puzzle asks for something better
+    let lines = await rootLines(engine, fen, depth, me, step === 0 ? d.playedUci : null, { pages: step === 0 ? 6 : 1, fastestMate: step > 0 });
+    if (!lines.length) break;
+    if (step > 0) {
+      // decide from the first page whether this step is kept at all before paging any further
+      const b0 = san(fen, lines[0].move), s1 = lines.length > 1 ? lines[1].s : -999999;
+      const kept = lines[0].s >= 90000 || lines[0].s - s1 >= 150 || new Chess(fen).inCheck() || b0.capture || b0.check;
+      if (!kept) break;
+      if (lines.more) lines = await rootLines(engine, fen, depth, me, null, { out: lines, pages: 5, fastestMate: true });
+    }
+    if (step === 0) {
+      // MultiPV root scores can miss a refutation that a search of the position after the move finds;
+      // the played move is measured that way below, so measure its alternatives the same way.
+      const top = lines.slice(0, 4);
+      for (const l of top) l.s = await childScore(engine, fen, l.move, depth, me);
+      lines = top.sort((a, b) => b.s - a.s).concat(lines.slice(4));
+    }
+    const best = lines[0].s;
     if (evalBest === null) evalBest = best;
-    const tol = Math.abs(best) < 3000 ? 60 : 2000;
-    let accept = infos.filter((_, k) => scores[k] >= best - tol && scores[k] > -150).map((i) => i.pv[0]);
-    if (!accept.length) accept = [infos[0].pv[0]];
-    const bestMv = infos[0].pv[0];
-    const second = scores.length > 1 ? scores[1] : -999999;
+    mating = best >= 90000;
+    // after the first move of a mate, only the fastest mates
+    let accept = lines.filter((l) => (mating && step > 0 ? l.s >= best : acceptable(l.s, best))).map((l) => l.move);
+    if (!accept.length) accept = [lines[0].move];
+    const bestMv = lines[0].move;
+    const second = lines.length > 1 ? lines[1].s : -999999;
     const inCheck = new Chess(fen).inCheck();
     const bm = san(fen, bestMv);
-    const forcing = best - second >= 150 || inCheck || bm.capture || bm.check;
+    const forcing = mating || best - second >= 150 || inCheck || bm.capture || bm.check;
     if (step > 0 && !forcing) break;
     sanLine.push(bm.san);
     fen = bm.fen;
@@ -120,19 +233,23 @@ export async function buildPuzzle(engine, game, d, depth) {
       }
     }
   }
-  if (steps.length && steps[0].accept.some((a) => a.slice(0, 4) === d.playedUci.slice(0, 4))) steps.length = 0;
+  // Keep the puzzle only if this deeper search agrees with the detector: the best alternative beats the
+  // move played by 2+ pawns, the position was not already lost, and the move played gave the edge away.
+  if (evalBest === null || clamp(evalBest) - clamp(evalPlayed) < 200 || clamp(evalBest) <= -300 || clamp(evalPlayed) >= 100)
+    steps.length = 0;
   const theme = [];
-  if (refline[0] && refline[0].includes("x")) theme.push("기물 흘림");
+  if (Math.abs(evalPlayed) < 90000 && hungPiece(d.fen, d.playedUci, refline)) theme.push("기물 흘림");
   if (evalBest > 300 && evalPlayed < 100) theme.push("이기던 판 놓침");
-  if (Math.abs(evalBest) >= 90000 || sanLine.some((s) => s.includes("#"))) theme.push("메이트 있음");
+  // "had a mate" is about my moves only (even indexes of the line), not a mate against me
+  if (evalBest >= 90000 || sanLine.some((s, i) => i % 2 === 0 && s.endsWith("#"))) theme.push("메이트 있음");
   if (sanLine[0] && sanLine[0].includes("x")) theme.push("잡을 수 있었음");
   if (d.ply <= 20) theme.push("오프닝");
   if (new Chess(d.fen).inCheck()) theme.push("체크 대응");
   if (!theme.length) theme.push("포지션");
   return {
-    id: game.link || `${game.ts}-${d.ply}`,
+    id: game.key || game.link || `${game.ts}-${d.ply}`,
     link: game.link,
-    date: new Date(game.ts).toISOString().slice(0, 10).replace(/-/g, "."),
+    date: game.ts > 0 ? game.day || localDay(game.ts) : "?",
     opp: me === "w" ? game.black : game.white,
     fen: d.fen,
     me,
@@ -155,10 +272,11 @@ export function buildReport(games, puzzles) {
   const chrono = [...games].sort((a, b) => a.ts - b.ts);
   const count = (arr, r) => arr.filter((g) => g.res === r).length;
   const total = { n: chrono.length, W: count(chrono, "W"), D: count(chrono, "D"), L: count(chrono, "L") };
-  // sessions: a gap of more than an hour starts a new one
+  // sessions: a gap of more than an hour starts a new one; a game with no known date breaks the chain
   const rows = [];
   let streak = 0, prevTs = null;
   for (const g of chrono) {
+    if (!(g.ts > 0)) { streak = 0; prevTs = null; continue; }
     if (prevTs !== null && g.ts - prevTs > 3600 * 1000) streak = 0;
     rows.push({ streak, res: g.res });
     streak = g.res === "L" ? streak + 1 : 0;
@@ -172,7 +290,8 @@ export function buildReport(games, puzzles) {
   const after2 = bucket((k) => k >= 2);
   let longest = 0, cur = 0;
   for (const g of chrono) { cur = g.res === "L" ? cur + 1 : 0; longest = Math.max(longest, cur); }
-  const early = puzzles.filter((p) => p.ply <= 20).length;
+  // move number, not ply: right for [FEN] starts and for puzzles saved by older versions
+  const early = puzzles.filter((p) => p.moveno <= 10).length;
   const thrown = puzzles.filter((p) => p.theme.includes("이기던 판 놓침")).length;
   const hung = puzzles.filter((p) => p.theme.includes("기물 흘림")).length;
   const missed = puzzles.filter((p) => p.theme.includes("잡을 수 있었음")).length;
