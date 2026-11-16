@@ -278,7 +278,7 @@ function draw(){
     const sq = sqName(r, f);
     const fi = FILES.indexOf(sq[0]), rk = +sq[1];
     const d = document.createElement("div");
-    d.className = "sq " + ((fi + rk) % 2 === 1 ? "l" : "d");
+    d.className = "sq " + ((fi + rk) % 2 === 0 ? "l" : "d");
     d.dataset.sq = sq;
     if ((st.last && (st.last.slice(0,2) === sq || st.last.slice(2,4) === sq)) || st.sel === sq) d.classList.add("hl");
     if (st.hintSq.includes(sq)) d.classList.add("hint");
