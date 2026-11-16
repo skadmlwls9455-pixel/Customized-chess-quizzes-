@@ -28,12 +28,15 @@ async function getJSON(path) {
   } catch (e) {
     if (e.notFound) throw e;
     // Fall back to our own proxy (works when deployed on Vercel).
-    const r = await fetch("/api/chesscom?path=" + encodeURIComponent(path));
+    let r;
+    try { r = await fetch("/api/chesscom?path=" + encodeURIComponent(path)); }
+    catch (_) { throw new Error(t("err.offline")); }
     const isJson = (r.headers.get("content-type") || "").includes("json");
     if (r.status === 404 && isJson) throw Object.assign(new Error("not found"), { notFound: true });
     if (!isJson) throw new Error(t("err.offline"));
     if (!r.ok) throw new Error(t("err.http", { s: r.status }));
-    return await r.json();
+    try { return await r.json(); }
+    catch (_) { throw new Error(t("err.offline")); }
   }
 }
 
@@ -113,16 +116,17 @@ export function parsePgnFile(text, username) {
     if (w !== user && b !== user) continue;
     const me = w === user ? "w" : "b";
     const r = h.Result;
-    const res = r === "1/2-1/2" ? "D" : (r === "1-0") === (me === "w") ? "W" : r === "*" ? "D" : "L";
+    const res = r === "1/2-1/2" ? "D" : r === "1-0" ? (me === "w" ? "W" : "L") : r === "0-1" ? (me === "b" ? "W" : "L") : null;
+    if (!res) continue; // unfinished or unknown result ("*")
     const d = (h.UTCDate || h.Date || "").replace(/\./g, "-");
-    const t = h.UTCTime || h.StartTime || "00:00:00";
-    const ts = Date.parse(`${d}T${t}Z`) || 0;
+    const tm = h.UTCTime || h.StartTime || "00:00:00";
+    const ts = Date.parse(`${d}T${tm}Z`) || 0;
     const tc = h.TimeControl || "";
     const base = parseInt(tc, 10);
     const timeClass = tc.includes("/") || tc === "-" ? "daily" : base < 180 ? "bullet" : base < 600 ? "blitz" : "rapid";
     games.push({
       white: h.White, black: h.Black, me, res, pgn: chunk, ts,
-      link: h.Link || "", timeClass,
+      link: /^https?:\/\//i.test(h.Link || "") ? h.Link : "", timeClass,
       key: h.Link || "pgn:" + hash(chunk.trim()),
       myElo: +(me === "w" ? h.WhiteElo : h.BlackElo) || null,
       oppElo: +(me === "w" ? h.BlackElo : h.WhiteElo) || null,

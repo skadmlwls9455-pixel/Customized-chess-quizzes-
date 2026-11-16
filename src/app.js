@@ -23,18 +23,62 @@ let filter = "전체", view = [], pos = 0, st = null;
 
 /* ---------- storage ---------- */
 const key = u => "ccq:v1:" + u.toLowerCase();
-function readCache(u){ try { return JSON.parse(localStorage.getItem(key(u)) || "null"); } catch(_) { return null; } }
+const isObj = x => !!x && typeof x === "object" && !Array.isArray(x);
+const isStr = x => typeof x === "string";
+const isUci = x => isStr(x) && /^[a-h][1-8][a-h][1-8][qrbn]?$/.test(x);
+const isSan = x => isStr(x) && /^[a-hKQRBNO1-8x=+#-]{2,10}$/.test(x);
+const sameMove = (a, b) => a.slice(0,4) === b.slice(0,4) && (a[4] || "") === (b[4] || "");
+const uciObj = u => ({from: u.slice(0,2), to: u.slice(2,4), promotion: u[4] || "q"});
+// Only http(s) links: a PGN [Link] header or an old cache could hold a javascript: or data: URL.
+function safeLink(u){
+  try { const x = new URL(String(u)); return x.protocol === "https:" || x.protocol === "http:" ? x.href : ""; }
+  catch(_) { return ""; }
+}
+// localStorage may hold an older, partial or hand-edited cache: keep only puzzles that load and play.
+function validPuzzle(p){
+  if (!isObj(p) || !isStr(p.id) || !isStr(p.fen) || (p.me !== "w" && p.me !== "b") || !isStr(p.date)) return false;
+  if (!isSan(p.played) || !isUci(p.played_uci) || !(p.lastmove == null || isStr(p.lastmove))) return false;
+  if (!Number.isFinite(p.eval_best) || !Number.isFinite(p.eval_played)) return false;
+  if (![p.refline, p.san_line].every(a => Array.isArray(a) && a.every(isSan))) return false;
+  if (!Array.isArray(p.theme) || !p.theme.every(isStr) || !Array.isArray(p.steps) || !p.steps.length) return false;
+  if (!p.steps.every(s => isObj(s) && Array.isArray(s.accept) && s.accept.length && s.accept.every(isUci) && isUci(s.best) && (s.reply == null || isUci(s.reply)))) return false;
+  try {
+    new Chess(p.fen).move(uciObj(p.played_uci));
+    const c = new Chess(p.fen);
+    for (const s of p.steps){ c.move(uciObj(s.best)); if (s.reply) c.move(uciObj(s.reply)); }
+  } catch(_) { return false; }
+  return true;
+}
+function cleanProgress(pr){
+  const out = {done:{}, clean:{}, habit:{}};
+  if (isObj(pr)) for (const k of Object.keys(out)) if (isObj(pr[k])) out[k] = pr[k];
+  return out;
+}
+function readCache(u){
+  let c;
+  try { c = JSON.parse(localStorage.getItem(key(u)) || "null"); } catch(_) { return null; }
+  if (!isObj(c) || !Array.isArray(c.puzzles) || !Array.isArray(c.games)) return null;
+  c.user = isStr(c.user) && c.user ? c.user : u;
+  c.puzzles = c.puzzles.filter(validPuzzle);
+  c.games = c.games.filter(g => isObj(g) && Number.isFinite(g.ts) && ["W","D","L"].includes(g.res));
+  c.analyzed = Array.isArray(c.analyzed) ? c.analyzed.filter(isStr) : [];
+  c.progress = cleanProgress(c.progress);
+  return c;
+}
 function writeCache(){
   if (!CACHE) return;
   CACHE.progress = store;
   try { localStorage.setItem(key(USER), JSON.stringify(CACHE)); } catch(_) {}
   try {
-    const list = JSON.parse(localStorage.getItem("ccq:users") || "[]").filter(x => x.toLowerCase() !== USER.toLowerCase());
+    const list = savedUsers().filter(x => x.toLowerCase() !== USER.toLowerCase());
     list.unshift(USER); localStorage.setItem("ccq:users", JSON.stringify(list.slice(0, 6)));
   } catch(_) {}
 }
 const save = () => writeCache();
-function savedUsers(){ try { return JSON.parse(localStorage.getItem("ccq:users") || "[]"); } catch(_) { return []; } }
+function savedUsers(){
+  try { const a = JSON.parse(localStorage.getItem("ccq:users") || "[]"); return Array.isArray(a) ? a.filter(x => isStr(x) && x) : []; }
+  catch(_) { return []; }
+}
 
 /* ---------- screens ---------- */
 function show(name){
@@ -66,11 +110,13 @@ function renderSaved(){
 
 function openCache(u, c){
   USER = c.user || u; CACHE = c; PUZ = c.puzzles;
-  store = Object.assign({done:{}, clean:{}, habit:{}}, c.progress || {});
+  store = cleanProgress(c.progress);
   filter = "전체"; pos = 0;
   REPORT = buildReport(c.games, PUZ);
+  // rebuild the puzzle screen even with no puzzles, so it never keeps a previous user's board
+  rebuildView(); load();
   if (!PUZ.length){ renderReport(); show("report"); return; }
-  rebuildView(); load(); show("puzzle");
+  show("puzzle");
 }
 
 /* ---------- analysis pipeline ---------- */
@@ -108,8 +154,8 @@ async function runInner(user, getGames){
   const g0 = games[0];
   const display = g0 ? (g0.me === "w" ? g0.white : g0.black) || user : user;
   USER = display;
-  CACHE = { user: display, puzzles, analyzed: [...done], games: games.map(g => ({ts: g.ts, res: g.res})), progress: prev ? prev.progress : null, at: Date.now() };
-  store = Object.assign({done:{}, clean:{}, habit:{}}, CACHE.progress || {});
+  store = cleanProgress(prev && prev.progress);
+  CACHE = { user: display, puzzles, analyzed: [...done], games: games.map(g => ({ts: g.ts, res: g.res})), progress: store, at: Date.now() };
   $("progTitle").textContent = todo.length ? t("prog.analyzing", {n: todo.length}) : t("prog.cached");
   if (todo.length){
     $("progSub").textContent = t("prog.engine");
@@ -117,6 +163,7 @@ async function runInner(user, getGames){
     catch (e){ engine = null; show("home"); $("err").textContent = t("err.engine") + " (" + e.message + ")"; return; }
   }
   const t0 = Date.now();
+  let died = false;
   for (let i = 0; i < todo.length && !cancelled; i++){
     const g = todo[i];
     const left = i ? Math.round((Date.now() - t0) / i * (todo.length - i) / 1000) : null;
@@ -132,13 +179,21 @@ async function runInner(user, getGames){
       CACHE.analyzed.push(gameKey(g));
     } catch (e){
       console.warn("skip game", g.link, e);
-      if (engine && engine.dead){ $("err").textContent = t("err.engineDied"); break; }
+      if (engine && engine.dead){ died = true; break; }
     }
     puzzles.sort((a, b) => b.date.localeCompare(a.date));
     CACHE.puzzles = puzzles; writeCache();
   }
   $("progBar").style.width = "100%";
   openCache(user, CACHE);
+  if (died) notice(t("err.engineDied"));
+}
+
+// A one-off warning on whichever screen openCache() landed on.
+function notice(text){
+  const html = `<span style="color:#ffb3a9">${esc(text)}</span>`;
+  if (!$("puzzleView").classList.contains("hidden")) $("msg").innerHTML = html;
+  else $("reportView").insertAdjacentHTML("afterbegin", `<div class="err" style="margin:0 0 12px">${esc(text)}</div>`);
 }
 
 $("form").addEventListener("submit", e => {
@@ -162,7 +217,9 @@ $("pgnFile").addEventListener("change", async e => {
   const raw = $("user").value.trim();
   const user = normalizeUser(raw) || raw.toLowerCase();
   if (!raw){ $("err").textContent = t("err.pgnId"); e.target.value = ""; return; }
-  const text = await f.text();
+  let text;
+  try { text = await f.text(); }
+  catch (_){ $("err").textContent = t("err.pgnRead"); e.target.value = ""; return; }
   const want = +$("nLoss").value;
   run(user, async () => {
     const gs = parsePgnFile(text, user);
@@ -252,10 +309,17 @@ const msg = h => { $("msg").innerHTML = h; };
 const turnTxt = c => c === "w" ? t("pz.turnW") : t("pz.turnB");
 
 function load(){
-  if (!view.length){ $("board").innerHTML = ""; setTop("ok", t("pz.allDone"), t("pz.allDoneSub")); msg(""); renderSide(); return; }
+  $("promo").classList.remove("show");
+  drag = null; clearGhosts();
+  if (!view.length){
+    st = null;
+    $("board").innerHTML = ""; $("explain").classList.remove("show"); $("count").textContent = "0 / 0";
+    if (PUZ.length) setTop("ok", t("pz.allDone"), t("pz.allDoneSub"));
+    else setTop("ok", t("pz.none"), t("pz.noneSub"));
+    msg(""); renderSide(); return;
+  }
   const idx = view[pos], p = PUZ[idx];
   const game = new Chess(p.fen);
-  $("promo").classList.remove("show");
   st = {p, idx, game, step:0, sel:null, hint:0, last:p.lastmove, done:false, busy:false, wrongs:0, usedAnswer:false, badge:null, hintSq:[]};
   const meW = p.me === "w";
   $("oppName").textContent = p.opp;
@@ -264,7 +328,8 @@ function load(){
   $("meAv").style.backgroundImage = `url("${PIECE[p.me + "k"]}")`;
   setTop(p.me, turnTxt(p.me), p.steps.length > 1 ? t("pz.findN", {n: p.steps.length}) : t("pz.find"));
   $("meta").textContent = t("pz.meta", {d: p.date.replaceAll(".","/"), n: p.moveno});
-  $("glink").href = p.link || "#"; $("glink").style.visibility = p.link ? "visible" : "hidden";
+  const link = safeLink(p.link);
+  $("glink").href = link || "#"; $("glink").style.visibility = link ? "visible" : "hidden";
   $("tags").innerHTML = (store.habit[p.id] ? `<span class="tag warn">${t("f.손버릇")}</span>` : "") + p.theme.map(x=>`<span class="tag">${t("f." + x)}</span>`).join("");
   msg(t("pz.howto"));
   $("explain").classList.remove("show");
@@ -278,6 +343,7 @@ function sqName(r, f){ const flip = st.p.me === "b"; return (flip ? FILES[7-f] :
 function sqEl(sq){ return document.querySelector(`.sq[data-sq="${sq}"]`); }
 
 function draw(){
+  if (!st) return;
   const el = $("board"); el.innerHTML = "";
   const flip = st.p.me === "b";
   const legal = st.sel ? st.game.moves({square: st.sel, verbose: true}) : [];
@@ -350,6 +416,7 @@ function bindBoard(){
     const d = drag; drag = null;
     clearGhosts();
     try { bd.releasePointerCapture(e.pointerId); } catch(_) {}
+    if (!st) return;
     if (cancel){ draw(); return; }
     if (d.moved){
       const to = sqAt(e.clientX, e.clientY);
@@ -402,8 +469,9 @@ function play(uci){
 
 function attempt(uci){
   const p = st.p, step = p.steps[st.step], cur = st;
-  const ok = step.accept.some(a => a === uci || (a.slice(0,4) === uci.slice(0,4) && (a.length === 4 || !uci[4] || a[4] === uci[4])));
-  const isPlayed = st.step === 0 && uci.slice(0,4) === p.played_uci.slice(0,4);
+  const real = step.accept.find(a => sameMove(a, uci));
+  const ok = !!real;
+  const isPlayed = st.step === 0 && sameMove(p.played_uci, uci);
   if (!ok){
     st.wrongs++;
     play(uci); st.badge = {sq: uci.slice(2,4), kind: "bad"}; st.hintSq = []; draw();
@@ -423,9 +491,8 @@ function attempt(uci){
     }, 900);
     return;
   }
-  const real = step.accept.find(a => a.slice(0,4) === uci.slice(0,4)) || uci;
   play(real);
-  const isBest = real.slice(0,4) === step.best.slice(0,4);
+  const isBest = sameMove(real, step.best);
   st.badge = {sq: real.slice(2,4), kind: isBest ? "best" : "ok"}; st.hintSq = [];
   st.step++;
   draw();
@@ -480,7 +547,7 @@ function showExplain(){
 }
 
 $("hintBtn").onclick = () => {
-  if (st.done || st.busy) return;
+  if (!st || st.done || st.busy) return;
   const best = st.p.steps[st.step].best;
   st.hint++;
   st.hintSq = st.hint === 1 ? [best.slice(0,2)] : [best.slice(0,2), best.slice(2,4)];
@@ -488,7 +555,7 @@ $("hintBtn").onclick = () => {
   draw();
 };
 $("showBtn").onclick = () => {
-  if (st.done || st.busy) return;
+  if (!st || st.done || st.busy) return;
   st.usedAnswer = true; st.busy = true; st.hintSq = [];
   const cur = st;
   const go = () => {
@@ -502,7 +569,7 @@ $("showBtn").onclick = () => {
   go();
 };
 $("playedBtn").onclick = () => {
-  if (st.busy) return;
+  if (!st || st.busy) return;
   const p = st.p, cur = st;
   st.game = new Chess(p.fen); st.step = 0; st.sel = null; st.hintSq = []; st.done = true; st.busy = true;
   play(p.played_uci); st.badge = {sq: p.played_uci.slice(2,4), kind: "bad"}; draw();
