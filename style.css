@@ -99,6 +99,7 @@ html,body{margin:0;overflow-x:hidden;background:var(--bg);color:var(--ink);font-
 .field input{flex:1;min-width:0;font:inherit;font-size:16px;padding:12px 14px;border-radius:6px;border:1px solid var(--line);background:#1d1c1a;color:#fff}
 .opts{display:flex;flex-wrap:wrap;gap:14px;margin:14px 0 4px;color:var(--mute);font-size:13.5px}
 .opts label{display:flex;align-items:center;gap:6px;cursor:pointer}
+.opts input[type=checkbox]{accent-color:var(--green);width:16px;height:16px;margin:0}
 .opts select{font:inherit;background:#1d1c1a;color:#fff;border:1px solid var(--line);border-radius:5px;padding:4px 6px}
 .small{font-size:12.5px;color:var(--dim);line-height:1.6;margin-top:14px}
 .small a{color:var(--mute)}
