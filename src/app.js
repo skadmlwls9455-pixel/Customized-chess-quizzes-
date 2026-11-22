@@ -377,7 +377,8 @@ function renderReport(){
   const r = REPORT; if (!r) return;
   const tt = r.total;
   const rules = [];
-  if (r.after2.n >= 4 && r.after2.L / r.after2.n > r.fresh.L / Math.max(r.fresh.n, 1) + 0.1)
+  if (r.after2.n < 4) rules.push(t("rep.tiltFew", {n: r.after2.n}));
+  else if (r.after2.L / r.after2.n > r.fresh.L / Math.max(r.fresh.n, 1) + 0.1)
     rules.push(t("rep.tilt", {a: pct(r.fresh.L, r.fresh.n), b: pct(r.after2.L, r.after2.n)}));
   else rules.push(t("rep.noTilt", {a: pct(r.fresh.L, r.fresh.n), b: pct(r.after2.L, r.after2.n)}));
   if (r.nPuz && r.early / r.nPuz >= 0.4) rules.push(t("rep.early", {p: pct(r.early, r.nPuz)}));
@@ -414,7 +415,7 @@ function renderSide(){
   FILTERS.forEach(name => {
     const n = name === "전체" ? PUZ.length : name === "안 푼 것" ? PUZ.filter(p=>!store.done[p.id]).length
       : name === "손버릇" ? PUZ.filter(p=>store.habit[p.id]).length : PUZ.filter(p=>p.theme.includes(name)).length;
-    if (!n && !["안 푼 것","손버릇"].includes(name)) return;
+    if (!n && name !== "안 푼 것" && name !== filter) return;
     const b = document.createElement("button");
     b.className = "chip" + (name === filter ? " on" : "");
     b.textContent = `${t("f." + name)} ${n}`;
@@ -430,7 +431,7 @@ function renderSide(){
     if (store.habit[p.id]) b.classList.add("habit");
     if (k === pos) b.classList.add("cur");
     b.title = `${p.date} vs ${p.opp}`;
-    b.onclick = () => { pos = k; load(); if (innerWidth <= 900) $("puzzleView").scrollIntoView({ behavior: "smooth", block: "start" }); };
+    b.onclick = () => { pos = k; load(); toBoard(); };
     g.appendChild(b);
   });
   $("sDone").textContent = `${PUZ.filter(p=>store.done[p.id]).length}/${PUZ.length}`;
@@ -706,7 +707,11 @@ function numbered(arr, startNo, whiteFirst){
   });
   return out.join(" ");
 }
-function evalTxt(v){ if (Math.abs(v) >= 90000) return v > 0 ? t("ev.mate") : t("ev.mated"); return (v > 0 ? "+" : "") + (v/100).toFixed(1); }
+function evalTxt(v){
+  if (Math.abs(v) >= 90000) return v > 0 ? t("ev.mate") : t("ev.mated");
+  const x = Math.round(v / 10) / 10; // avoid "-0.0"
+  return x === 0 ? "0.0" : (x > 0 ? "+" : "") + x.toFixed(1);
+}
 function showExplain(){
   const p = st.p, meW = p.me === "w";
   $("explain").innerHTML =
@@ -761,13 +766,15 @@ $("playedBtn").onclick = () => {
     msg(t("pz.playedMsg", {r: `<span class="mv">${p.refline[0] || ""}</span>`}));
   }, 900);
 };
-$("retryBtn").onclick = () => load();
-$("prevBtn").onclick = () => { if (!view.length) return; pos = (pos - 1 + view.length) % view.length; load(); };
+// on phones the panel sits below the board: bring the new board back into view
+function toBoard(){ if (innerWidth <= 900) $("puzzleView").scrollIntoView({ behavior: "smooth", block: "start" }); }
+$("retryBtn").onclick = () => { load(); toBoard(); };
+$("prevBtn").onclick = () => { if (!view.length) return; pos = (pos - 1 + view.length) % view.length; load(); toBoard(); };
 $("nextBtn").onclick = () => {
   if (!view.length) return;
   if (filter === "안 푼 것"){ const cur = view[pos]; rebuildView(); const k = view.findIndex(i => i > cur); pos = k >= 0 ? k : 0; }
   else pos = (pos + 1) % view.length;
-  load();
+  load(); toBoard();
 };
 document.addEventListener("keydown", e => {
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName) || $("puzzleView").classList.contains("hidden")) return;
