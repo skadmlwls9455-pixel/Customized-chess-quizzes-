@@ -3,12 +3,17 @@
 // Stockfish (WASM, lite single-threaded) wrapper.
 // Every call returns the final "info" line for each multipv slot, scored from the side to move.
 
+// No output at all for this long means the worker hung. Every engine line re-arms the timer, so a
+// slow phone that is still searching is never cut off (a fixed wall-clock limit used to do that).
+const WATCHDOG_MS = 60000;
+
 export class Engine {
   constructor(url = "vendor/stockfish-19-lite-single.js") {
     this.worker = new Worker(url);
     this.queue = [];
     this.current = null;
     this.dead = null;
+    this.critical = null;
     this.ready = new Promise((resolve, reject) => {
       this._onReady = resolve;
       this._readyFail = reject;
@@ -17,7 +22,11 @@ export class Engine {
       }, 30000);
     });
     this.worker.onmessage = (e) => this._line(typeof e.data === "string" ? e.data : String(e.data));
-    this.worker.onerror = (e) => this._fail(new Error("engine error: " + (e.message || "unknown")));
+    // Stockfish 19 prints "info string CRITICAL ERROR ..." and exits on a position it does not support.
+    // Keep that reason, so the caller can skip the game and start a new engine instead of giving up.
+    this.worker.onerror = (e) => this._fail(this.critical
+      ? Object.assign(new Error(this.critical), { badPosition: true })
+      : new Error("engine error: " + (e.message || "unknown")));
     this.worker.postMessage("uci");
     this.worker.postMessage("setoption name Hash value 32");
     this.worker.postMessage("isready");
@@ -35,6 +44,16 @@ export class Engine {
     try { this.worker.terminate(); } catch (_) {}
   }
 
+  _arm(job) {
+    clearTimeout(job.timer);
+    const due = Date.now() + WATCHDOG_MS;
+    job.timer = setTimeout(() => {
+      // a timer that fires far too late means the page was frozen or throttled, not the engine
+      if (Date.now() - due > 5000) this._arm(job);
+      else this._fail(new Error("no response"));
+    }, WATCHDOG_MS);
+  }
+
   _line(line) {
     if (line === "readyok" && this._onReady) {
       this._onReady();
@@ -42,8 +61,14 @@ export class Engine {
       this._next();
       return;
     }
+    if (line.startsWith("info string CRITICAL ERROR")) { this.critical = line.slice(12); return; }
     const job = this.current;
     if (!job) return;
+    this._arm(job);
+    if (job.newGame) {
+      if (line === "readyok") { clearTimeout(job.timer); this.current = null; job.resolve(); this._next(); }
+      return;
+    }
     if (line.startsWith("info ") && line.includes(" pv ") && line.includes(" score ")) {
       const t = line.split(" ");
       const get = (k) => t[t.indexOf(k) + 1];
@@ -61,37 +86,59 @@ export class Engine {
         .map((k) => job.infos[k]);
       clearTimeout(job.timer);
       this.current = null;
-      job.resolve({ infos, best: best && best !== "(none)" ? best : null });
+      if (job.cancelled) job.reject(job.cancelled);
+      else job.resolve({ infos, best: best && best !== "(none)" ? best : null });
       this._next();
     }
   }
 
   _next() {
-    if (this.current || this._onReady || !this.queue.length) return;
+    if (this.current || this._onReady || this.dead || !this.queue.length) return;
     const job = (this.current = this.queue.shift());
+    this._arm(job);
+    if (job.newGame) {
+      this.worker.postMessage("ucinewgame");
+      this.worker.postMessage("isready");
+      return;
+    }
     this.worker.postMessage(`setoption name MultiPV value ${job.multipv}`);
     this.worker.postMessage(`position fen ${job.fen}`);
-    this.worker.postMessage(`go depth ${job.depth}`);
-    // watchdog: ask for a move after 20s, give up after 40s
-    job.timer = setTimeout(() => {
-      this.worker.postMessage("stop");
-      job.timer = setTimeout(() => this._fail(new Error("no response")), 20000);
-    }, 20000);
+    this.worker.postMessage(`go depth ${job.depth}` + (job.searchmoves ? ` searchmoves ${job.searchmoves.join(" ")}` : ""));
   }
 
-  analyse(fen, depth, multipv = 1) {
+  // searchmoves (UCI moves) limits the search to those root moves.
+  analyse(fen, depth, multipv = 1, searchmoves = null) {
     if (this.dead) return Promise.reject(this.dead);
     return new Promise((resolve, reject) => {
-      this.queue.push({ fen, depth, multipv, resolve, reject, infos: {} });
+      this.queue.push({ fen, depth, multipv, searchmoves, resolve, reject, infos: {} });
       this._next();
     });
   }
 
-  stop() {
+  // Forget the hash and history tables of the previous game, so a game is analysed the same way
+  // whatever was analysed before it.
+  newGame() {
+    if (this.dead) return Promise.reject(this.dead);
+    return new Promise((resolve, reject) => {
+      this.queue.push({ newGame: true, resolve, reject });
+      this._next();
+    });
+  }
+
+  // Drops queued work and ends the running search early; their promises reject with `cancelled`.
+  cancel() {
+    const err = Object.assign(new Error("cancelled"), { cancelled: true });
+    this.queue.forEach((j) => j.reject(err));
     this.queue = [];
-    try {
-      this.worker.terminate();
-    } catch (_) {}
+    if (this.current && !this.dead && !this.current.newGame) {
+      this.current.cancelled = err;
+      this.worker.postMessage("stop");
+    }
+  }
+
+  // Releases the worker; anything pending rejects.
+  stop() {
+    this._fail(new Error("stopped"));
   }
 }
 

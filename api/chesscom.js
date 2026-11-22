@@ -17,9 +17,11 @@ export default async function handler(req, res) {
     });
     const body = await r.text();
     res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("Cache-Control", "public, s-maxage=600, max-age=60");
+    // Only cache successful answers; a 429/5xx from Chess.com must not stick on the CDN.
+    res.setHeader("Cache-Control", r.ok ? "public, s-maxage=600, max-age=60" : "no-store");
     res.status(r.status).send(body);
   } catch (e) {
+    res.setHeader("Cache-Control", "no-store");
     res.status(502).json({ error: "upstream failed" });
   }
 }

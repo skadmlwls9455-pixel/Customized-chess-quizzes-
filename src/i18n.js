@@ -36,6 +36,10 @@ const DICT = {
     "err.noTc": "시간 종류를 하나 이상 선택해 주세요.",
     "err.pgnId": "PGN에 기록된 내 아이디를 먼저 입력해 주세요.",
     "err.pgnNone": "PGN에서 이 아이디의 판을 찾지 못했어요.",
+    "err.pgnRead": "PGN 파일을 읽지 못했어요. 다른 파일로 시도해 주세요.",
+    "err.pgnUnreadable": "PGN에서 이 아이디의 패배한 판 {n}개를 읽지 못했어요. 다른 프로그램에서 다시 내보내 보세요.",
+    "err.unexpected": "분석 중 문제가 생겨 멈췄어요.",
+    "err.save": "브라우저 저장 공간이 가득 찼거나 막혀 있어서 기록을 저장하지 못했어요. 새로고침하면 지금부터 만든 퍼즐과 푼 기록이 사라질 수 있어요.",
     "err.notFound": "Chess.com에서 \"{u}\" 아이디를 찾지 못했어요.",
     "err.noGames": "이 아이디로 둔 게임이 없어요.",
     "err.offline": "Chess.com에 연결하지 못했어요. 잠시 후 다시 시도하거나 PGN 파일을 사용해 주세요.",
@@ -51,7 +55,7 @@ const DICT = {
     "rep.hung": "<b>기물을 공짜로 내주는 게 가장 큰 문제예요.</b> {n}판이 그렇게 기울었어요. 두기 전에 \"이 기물을 누가 잡을 수 있지?\"만 확인해도 크게 줄어요.",
     "rep.thrown": "<b>이기던 판을 {n}번 놓쳤어요.</b> 앞서 있을 때는 기물을 맞교환해 판을 단순하게 만드세요.",
     "rep.missed": "<b>상대 실수를 놓친 판이 {n}개예요.</b> 상대가 방금 둔 수로 어디가 비었는지 한 번씩 확인해 보세요.",
-    "rep.note": "패배한 판마다 엔진 평가가 처음으로 폰 2개 이상 떨어진 내 수를 \"승부가 갈린 수\"로 봤어요. 빠른 분석이라 숫자는 경향으로만 참고해 주세요.",
+    "rep.note": "패배한 판마다 엔진 평가가 처음으로 폰 2개 이상 떨어지면서 우세를 잃은 내 수를 \"승부가 갈린 수\"로 봤어요. 빠른 분석이라 숫자는 경향으로만 참고해 주세요.",
     "f.전체": "전체", "f.안 푼 것": "안 푼 것", "f.손버릇": "손버릇", "f.기물 흘림": "기물 흘림", "f.오프닝": "오프닝",
     "f.잡을 수 있었음": "잡을 수 있었음", "f.이기던 판 놓침": "이기던 판 놓침", "f.메이트 있음": "메이트 있음",
     "f.체크 대응": "체크 대응", "f.포지션": "포지션",
@@ -62,6 +66,7 @@ const DICT = {
     "btn.hint": "💡 힌트", "btn.show": "정답 보기", "btn.played": "내가 둔 수", "btn.next": "다음 퍼즐",
     "btn.prev": "← 이전", "btn.retry": "↻ 다시",
     "pz.allDone": "다 풀었어요!", "pz.allDoneSub": "이 분류에는 남은 퍼즐이 없어요",
+    "pz.none": "아직 만든 퍼즐이 없어요", "pz.noneSub": "다른 판을 더 분석해 보세요",
     "pz.turnW": "백 차례", "pz.turnB": "흑 차례",
     "pz.find": "최선의 수를 찾아보세요", "pz.findN": "최선의 수를 찾아보세요 · 내 수 {n}개",
     "pz.meta": "{d} · {n}수째",
@@ -76,6 +81,7 @@ const DICT = {
     "pz.beatHabit": "이번에는 손버릇을 이겼어요. 실전에서도 이 장면을 기억해 두세요.", "pz.nice": "잘했어요.",
     "pz.revealed": "정답 공개", "pz.later": "나중에 다시 풀어 보세요",
     "pz.hint1": "파란 칸의 기물을 움직여 보세요.", "pz.hint2": "여기서 여기로!",
+    "pz.hintPromo": "승진은 {p}!", "pc.q": "퀸", "pc.r": "룩", "pc.b": "비숍", "pc.n": "나이트",
     "pz.playedTop": "실제로 둔 수: {m}", "pz.playedSub": "↻ 다시를 누르면 처음부터 풀 수 있어요",
     "pz.playedMsg": "상대가 {r}로 받아쳤어요.",
     "ex.line": "정답 수순", "ex.played": "실제로 둔 수", "ex.punish": "상대 응징:",
@@ -97,10 +103,10 @@ const DICT = {
     "note.privacy": "Analysis runs in your browser and results are saved only on this device. 30 games take a few minutes on Normal.",
     "note.pgn": "Not on Chess.com, or loading fails? Use a PGN file:",
     "pgn.pick": "Choose PGN file",
-    "saved": "{u} · {n} puzzles · Continue",
+    "saved": "{u} · {n} puzzles · Continue", "saved.one": "{u} · {n} puzzle · Continue",
     "prog.loading": "Loading games",
     "prog.month": "Loading {y}/{m}",
-    "prog.analyzing": "Analyzing {n} lost games",
+    "prog.analyzing": "Analyzing {n} lost games", "prog.analyzing.one": "Analyzing {n} lost game",
     "prog.cached": "Already analyzed",
     "prog.engine": "Starting engine",
     "prog.left": " · about {t} left", "unit.min": "{n} min", "unit.sec": "{n}s",
@@ -115,6 +121,10 @@ const DICT = {
     "err.noTc": "Please select at least one time control.",
     "err.pgnId": "Enter your username as it appears in the PGN first.",
     "err.pgnNone": "No games for this username were found in the PGN.",
+    "err.pgnRead": "Couldn't read the PGN file. Please try another file.",
+    "err.pgnUnreadable": "Couldn't read {n} of your lost games in the PGN. Try exporting it again from another program.",
+    "err.unexpected": "Something went wrong during the analysis.",
+    "err.save": "Couldn't save to this browser (storage is full or blocked). Puzzles and progress from now on may be lost when you reload.",
     "err.notFound": "Couldn't find \"{u}\" on Chess.com.",
     "err.noGames": "This account has no games.",
     "err.offline": "Couldn't reach Chess.com. Try again later or use a PGN file.",
@@ -127,10 +137,10 @@ const DICT = {
     "rep.tilt": "<b>After 2 losses in a row, take a 10-minute break.</b> Your usual loss rate is {a}, but after two straight losses in the same session it rises to {b}.",
     "rep.noTilt": "<b>Losing streaks don't seem to break you.</b> Loss rate after 2 losses: {b} (usually {a}). Still, consider stopping after 3.",
     "rep.early": "<b>The first 10 moves are the danger zone.</b> {p} of your turning points came within 10 moves. Start with the \"Opening\" puzzles.",
-    "rep.hung": "<b>Hanging pieces is your biggest leak.</b> {n} games turned that way. Before each move, just ask \"who can take this piece?\"",
-    "rep.thrown": "<b>You let {n} winning games slip.</b> When ahead, trade pieces and keep it simple.",
-    "rep.missed": "<b>You missed your opponent's mistake in {n} games.</b> After each of their moves, check what it left undefended.",
-    "rep.note": "In each lost game, the first move of yours that dropped the evaluation by 2+ pawns is treated as the turning point. Numbers come from a quick analysis, so read them as trends.",
+    "rep.hung": "<b>Hanging pieces is your biggest leak.</b> {n} games turned that way. Before each move, just ask \"who can take this piece?\"", "rep.hung.one": "<b>Hanging pieces is your biggest leak.</b> {n} game turned that way. Before each move, just ask \"who can take this piece?\"",
+    "rep.thrown": "<b>You let {n} winning games slip.</b> When ahead, trade pieces and keep it simple.", "rep.thrown.one": "<b>You let {n} winning game slip.</b> When ahead, trade pieces and keep it simple.",
+    "rep.missed": "<b>You missed your opponent's mistake in {n} games.</b> After each of their moves, check what it left undefended.", "rep.missed.one": "<b>You missed your opponent's mistake in {n} game.</b> After each of their moves, check what it left undefended.",
+    "rep.note": "In each lost game, the first move of yours that dropped the evaluation by 2+ pawns and gave away the advantage is treated as the turning point. Numbers come from a quick analysis, so read them as trends.",
     "f.전체": "All", "f.안 푼 것": "Unsolved", "f.손버릇": "Habits", "f.기물 흘림": "Hung piece", "f.오프닝": "Opening",
     "f.잡을 수 있었음": "Missed capture", "f.이기던 판 놓침": "Thrown win", "f.메이트 있음": "Mate",
     "f.체크 대응": "In check", "f.포지션": "Positional",
@@ -141,6 +151,7 @@ const DICT = {
     "btn.hint": "💡 Hint", "btn.show": "Solution", "btn.played": "My move", "btn.next": "Next puzzle",
     "btn.prev": "← Prev", "btn.retry": "↻ Retry",
     "pz.allDone": "All done!", "pz.allDoneSub": "No puzzles left in this filter",
+    "pz.none": "No puzzles yet", "pz.noneSub": "Analyze more games to create some",
     "pz.turnW": "White to move", "pz.turnB": "Black to move",
     "pz.find": "Find the best move", "pz.findN": "Find the best move · {n} moves",
     "pz.meta": "{d} · move {n}",
@@ -155,6 +166,7 @@ const DICT = {
     "pz.beatHabit": "You beat the habit this time. Remember this position in your games.", "pz.nice": "Well done.",
     "pz.revealed": "Solution shown", "pz.later": "Come back and try it again",
     "pz.hint1": "Move the piece on the blue square.", "pz.hint2": "From here to here!",
+    "pz.hintPromo": "Promote to a {p}.", "pc.q": "queen", "pc.r": "rook", "pc.b": "bishop", "pc.n": "knight",
     "pz.playedTop": "You played: {m}", "pz.playedSub": "Press ↻ Retry to solve it from the start",
     "pz.playedMsg": "Your opponent answered with {r}.",
     "ex.line": "Solution", "ex.played": "You played", "ex.punish": "Refutation:",
@@ -175,7 +187,9 @@ function detect() {
 export const LANG = detect();
 
 export function t(key, vars) {
-  let s = (DICT[LANG] && DICT[LANG][key]) ?? DICT.ko[key] ?? key;
+  const d = DICT[LANG] || {};
+  // singular forms live under "<key>.one" (English only; Korean has none)
+  let s = (vars && vars.n === 1 ? d[key + ".one"] : undefined) ?? d[key] ?? DICT.ko[key] ?? key;
   if (vars) for (const k in vars) s = s.split("{" + k + "}").join(String(vars[k]));
   return s;
 }
